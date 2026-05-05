@@ -79,6 +79,22 @@ function parseVoyageMeta(raw: unknown): VoyageMeta {
   }
 }
 
+/** Firestore는 필드 값으로 undefined를 허용하지 않음 — merge 시 중첩 객체 정리 */
+function voyageMetaForFirestore(meta: VoyageMeta): VoyageMeta {
+  const completedAt =
+    typeof meta.completedAt === 'string' && meta.completedAt.trim()
+      ? meta.completedAt.trim()
+      : undefined
+  return {
+    isCompleted: meta.isCompleted === true,
+    finalRetrospective:
+      typeof meta.finalRetrospective === 'string' && meta.finalRetrospective.trim()
+        ? meta.finalRetrospective.trim()
+        : null,
+    ...(completedAt ? { completedAt } : {}),
+  }
+}
+
 function parseRoutines(raw: unknown): MyRoutineEntry[] {
   if (!Array.isArray(raw)) return []
   const out: MyRoutineEntry[] = []
@@ -144,6 +160,9 @@ export async function mergeUserDoc(
   const payload: Record<string, unknown> = {
     ...partial,
     updatedAt: serverTimestamp(),
+  }
+  if (payload.voyageMeta !== undefined) {
+    payload.voyageMeta = voyageMetaForFirestore(payload.voyageMeta as VoyageMeta)
   }
   await setDoc(ref, payload, { merge: true })
 }
@@ -221,7 +240,27 @@ export async function setActiveVoyageProfile(
   uid: string,
   profile: MyVoyageProfile,
 ): Promise<void> {
-  const synced = withSyncedVoyageDerived(profile)
+  const milestoneSource = Array.isArray(profile.milestones)
+    ? profile.milestones
+    : []
+  const milestones: MyVoyageProfile['milestones'] = milestoneSource.map((m) => ({
+    id:
+      typeof m?.id === 'string' && m.id.trim()
+        ? m.id.trim()
+        : crypto.randomUUID(),
+    label: typeof m?.label === 'string' ? m.label : '',
+    completed: m?.completed === true,
+  }))
+  const synced = withSyncedVoyageDerived({
+    ...profile,
+    goalName: typeof profile.goalName === 'string' ? profile.goalName : '',
+    inspiredBy: profile.inspiredBy ?? null,
+    subGoal: typeof profile.subGoal === 'string' ? profile.subGoal : '',
+    linkedCategoryId: profile.linkedCategoryId ?? null,
+    voyageLegId:
+      typeof profile.voyageLegId === 'string' ? profile.voyageLegId : '',
+    milestones,
+  })
   const payload: VoyageDocActive = {
     userId: uid,
     status: 'active',

@@ -610,7 +610,13 @@ export default function MyOceanPage() {
   function handleDepart(e: React.FormEvent) {
     e.preventDefault()
     const name = emptyGoalDraft.trim()
-    if (!name) return
+    if (!name) {
+      showToast({
+        kind: 'sync_error',
+        message: '항해 목표를 먼저 입력해 주세요!',
+      })
+      return
+    }
 
     let resolvedCategoryId: string | null = null
     if (goalCategoryId === DEPART_NEW_CATEGORY_VALUE) {
@@ -633,11 +639,14 @@ export default function MyOceanPage() {
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
-    const milestones = lines.map((label) => ({
-      id: crypto.randomUUID(),
-      label,
-      completed: false,
-    }))
+    const milestones: MyVoyageProfile['milestones'] =
+      lines.length === 0
+        ? []
+        : lines.map((label) => ({
+            id: crypto.randomUUID(),
+            label,
+            completed: false,
+          }))
     setVoyageProfile(
       withSyncedVoyageDerived({
         goalName: name,
@@ -1171,9 +1180,8 @@ export default function MyOceanPage() {
               <button
                 type="submit"
                 disabled={
-                  !emptyGoalDraft.trim() ||
-                  (goalCategoryId === DEPART_NEW_CATEGORY_VALUE &&
-                    !departCustomCategoryDraft.trim())
+                  goalCategoryId === DEPART_NEW_CATEGORY_VALUE &&
+                  !departCustomCategoryDraft.trim()
                 }
                 className="w-full rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 py-4 text-base font-bold text-white shadow-lg shadow-indigo-300/40 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
               >
