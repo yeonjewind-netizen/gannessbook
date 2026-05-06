@@ -10,7 +10,10 @@ import {
   type RecordGeneration,
   type RecordMedia,
 } from '../data/gannessRecords'
-import { getMergedJourneyLog } from '../data/gannessPersistence'
+import {
+  getMergedJourneyLog,
+  storedMediaSrc,
+} from '../data/gannessPersistence'
 import { useMergedRecordCategories } from '../hooks/useGannessStorage'
 import RecordSubmissionForm, {
   type VoyageRecordPrefill,
@@ -717,7 +720,7 @@ export default function GannessRecordPage() {
                                       <DiaryMediaPreviewGrid
                                         items={row.mediaItems.map((m) => ({
                                           type: m.type,
-                                          dataUrl: m.dataUrl,
+                                          src: storedMediaSrc(m),
                                         }))}
                                         layout="admin"
                                         rowKeyPrefix={row.id}

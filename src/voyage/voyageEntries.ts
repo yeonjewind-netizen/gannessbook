@@ -46,12 +46,22 @@ export function parseStoredVoyageEntries(raw: string | null): LogEntry[] {
             const o = a as Record<string, unknown>
             const aid = typeof o.id === 'string' ? o.id.trim() : ''
             const t = o.type === 'video' ? 'video' : o.type === 'image' ? 'image' : ''
+            const mediaUrl =
+              typeof o.mediaUrl === 'string' &&
+              /^https?:\/\//i.test(o.mediaUrl.trim())
+                ? o.mediaUrl.trim()
+                : ''
             const dataUrl =
               typeof o.dataUrl === 'string' && o.dataUrl.startsWith('data:')
                 ? o.dataUrl
                 : ''
-            if (!aid || !t || !dataUrl) continue
-            atts.push({ id: aid, type: t, dataUrl })
+            if (!aid || !t || (!mediaUrl && !dataUrl)) continue
+            atts.push({
+              id: aid,
+              type: t,
+              ...(mediaUrl ? { mediaUrl } : {}),
+              ...(dataUrl ? { dataUrl } : {}),
+            })
           }
           if (atts.length > 0) attachments = atts
         }

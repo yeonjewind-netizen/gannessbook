@@ -1,10 +1,20 @@
 export type MoodTag = 'passion' | 'wall' | 'direction' | 'tailwind'
 
-/** 일지에 붙인 사진·영상 (로컬 data URL) */
+/** 일지에 붙인 사진·영상 — Firebase Storage URL 또는 로컬 data URL */
 export type LogAttachment = {
   id: string
   type: 'image' | 'video'
-  dataUrl: string
+  /** Firebase Storage 등 HTTPS 다운로드 주소 (저장 시 우선) */
+  mediaUrl?: string
+  /** 로컬 data URL — 미로그인·레거시 */
+  dataUrl?: string
+}
+
+/** 미리보기·재생에 사용할 단일 문자열 주소 */
+export function logAttachmentSrc(a: LogAttachment): string {
+  const https = a.mediaUrl?.trim()
+  if (https) return https
+  return a.dataUrl?.trim() ?? ''
 }
 
 export type LogEntry = {

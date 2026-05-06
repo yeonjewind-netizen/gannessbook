@@ -68,7 +68,17 @@ export function clearGannessBookLocalStorage(): void {
 
 export type StoredMediaItem = {
   type: 'image' | 'video'
-  dataUrl: string
+  /** 로컬 data URL */
+  dataUrl?: string
+  /** Firebase Storage 등 HTTPS URL */
+  mediaUrl?: string
+}
+
+/** 심사·그리드 표시용 단일 주소 */
+export function storedMediaSrc(m: StoredMediaItem): string {
+  const u = m.mediaUrl?.trim()
+  if (u) return u
+  return m.dataUrl?.trim() ?? ''
 }
 
 export type RecordApplication = {
@@ -224,13 +234,23 @@ function parseDailyRoutinesFromUnknown(raw: unknown): string[] | undefined {
 function normalizeStoredMedia(raw: unknown): StoredMediaItem | null {
   if (raw == null || typeof raw !== 'object') return null
   const m = raw as Partial<StoredMediaItem>
+  const mediaUrl =
+    typeof m.mediaUrl === 'string' &&
+    m.mediaUrl.trim() !== '' &&
+    /^https?:\/\//i.test(m.mediaUrl.trim())
+      ? m.mediaUrl.trim()
+      : ''
   const dataUrl =
     typeof m.dataUrl === 'string' && m.dataUrl.trim() !== ''
-      ? m.dataUrl
+      ? m.dataUrl.trim()
       : ''
-  if (!dataUrl) return null
+  if (!mediaUrl && !dataUrl) return null
   const type = m.type === 'video' ? 'video' : 'image'
-  return { type, dataUrl }
+  return {
+    type,
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(dataUrl ? { dataUrl } : {}),
+  }
 }
 
 function normalizeApplicationRecord(raw: unknown): RecordApplication | null {
@@ -694,9 +714,10 @@ export function approveApplication(appId: string): boolean {
 
   const items = Array.isArray(app.mediaItems) ? app.mediaItems : []
   const first = items[0]
+  const firstSrc = first ? storedMediaSrc(first) : ''
   const media: RecordMedia =
-    first && typeof first.dataUrl === 'string' && first.dataUrl
-      ? { type: first.type === 'video' ? 'video' : 'image', url: first.dataUrl }
+    first && firstSrc
+      ? { type: first.type === 'video' ? 'video' : 'image', url: firstSrc }
       : FALLBACK_MEDIA
 
   const newRow: RecordGeneration = {

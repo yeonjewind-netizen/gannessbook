@@ -4,6 +4,7 @@ import type { GannessRecordCategory } from '../data/gannessRecords'
 import {
   registerCustomRecordCategory,
   submitRecordApplication,
+  type StoredMediaItem,
   type VoyageDiarySnapshotItem,
 } from '../data/gannessPersistence'
 import {
@@ -19,6 +20,7 @@ import MediaLightbox, {
 import { DiaryMediaPreviewGrid } from './DiaryMediaPreviewGrid'
 import { TimelineMoodRibbon } from './TimelineMoodRibbon'
 import type { LogEntry } from '../voyage/types'
+import { logAttachmentSrc } from '../voyage/types'
 import { getVoyageEntriesForCurrentGoal } from '../voyage/voyageGoalDiary'
 import { loadMyVoyage } from '../voyage/myVoyageStorage'
 import { saveProfileApplicantName } from '../voyage/profileApplicantStorage'
@@ -245,11 +247,16 @@ export default function RecordSubmissionForm({
     )
     const voyageDiarySnapshots: VoyageDiarySnapshotItem[] = included.map(
       (e) => {
-        const mediaItems =
-          e.attachments?.map((a) => ({
-            type: a.type,
-            dataUrl: a.dataUrl,
-          })) ?? []
+        const mediaItems: StoredMediaItem[] = []
+        for (const a of e.attachments ?? []) {
+          const src = logAttachmentSrc(a)
+          if (!src) continue
+          if (/^https?:\/\//i.test(src)) {
+            mediaItems.push({ type: a.type, mediaUrl: src })
+          } else {
+            mediaItems.push({ type: a.type, dataUrl: src })
+          }
+        }
         return {
           id: e.id,
           createdAt: e.createdAt,
@@ -486,7 +493,7 @@ export default function RecordSubmissionForm({
                         <DiaryMediaPreviewGrid
                           items={entry.attachments.map((a) => ({
                             type: a.type,
-                            dataUrl: a.dataUrl,
+                            src: logAttachmentSrc(a),
                           }))}
                           layout="compact"
                           rowKeyPrefix={entry.id}

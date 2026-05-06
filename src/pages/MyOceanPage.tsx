@@ -6,13 +6,14 @@ import {
   CalendarDays,
   ChevronDown,
   Compass,
+  ImagePlus,
   ListChecks,
+  Loader2,
   Plus,
   Sailboat,
   SendHorizontal,
   Ship,
   Sparkles,
-  ImagePlus,
   Trash2,
   Waves,
   X,
@@ -23,11 +24,12 @@ import {
   registerCustomRecordCategory,
 } from '../data/gannessPersistence'
 import { useMergedRecordCategories } from '../hooks/useGannessStorage'
-import type {
-  LogAttachment,
-  LogEntry,
-  MoodTag,
-  VoyageMeta,
+import {
+  logAttachmentSrc,
+  type LogAttachment,
+  type LogEntry,
+  type MoodTag,
+  type VoyageMeta,
 } from '../voyage/types'
 import {
   TAG_OPTIONS,
@@ -64,6 +66,8 @@ import {
   setActiveVoyageProfile,
   upsertLog,
 } from '../lib/firestoreUtils'
+import { isFirebaseConfigured } from '../lib/firebase'
+import { uploadDiaryAttachment } from '../lib/logMediaStorage'
 import { useAuth } from '../context/AuthContext'
 import {
   aggregateDefaultCheersForDiaryIds,
@@ -311,6 +315,10 @@ export default function MyOceanPage() {
   const [twPendingAttach, setTwPendingAttach] = useState<LocalPendingAttach[]>(
     [],
   )
+  /** 일지 미디어 Storage 업로드 중 — 중복 제출 방지 */
+  const [diarySubmitBusy, setDiarySubmitBusy] = useState<
+    'wave' | 'tailwind' | null
+  >(null)
   const waveAttachInputRef = useRef<HTMLInputElement>(null)
   const twAttachInputRef = useRef<HTMLInputElement>(null)
 
@@ -671,8 +679,12 @@ export default function MyOceanPage() {
 
   async function handleSubmitWave(e: React.FormEvent) {
     e.preventDefault()
+    if (diarySubmitBusy) return
     const textTrim = draft.trim()
     if (!textTrim && wavePendingAttach.length === 0) return
+
+    const entryId = crypto.randomUUID()
+
     let legId = voyageProfile.voyageLegId.trim()
     if (!legId && voyageProfile.goalName.trim()) {
       legId = crypto.randomUUID()
@@ -686,30 +698,69 @@ export default function MyOceanPage() {
         })
       }
     }
+
     let attachments: LogAttachment[] | undefined
     if (wavePendingAttach.length > 0) {
-      const built = await Promise.all(
-        wavePendingAttach.map(async (p) => {
-          const dataUrl = await fileToDataUrl(p.file)
-          const type: LogAttachment['type'] = p.file.type.startsWith('video/')
-            ? 'video'
-            : 'image'
-          return {
-            id: crypto.randomUUID(),
-            type,
-            dataUrl,
-          }
-        }),
-      )
-      attachments = built
-      wavePendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-      setWavePendingAttach([])
+      const useStorage = Boolean(uid && isFirebaseConfigured())
+      if (useStorage) {
+        setDiarySubmitBusy('wave')
+        try {
+          attachments = await Promise.all(
+            wavePendingAttach.map(async (p) => {
+              const attId = crypto.randomUUID()
+              const type: LogAttachment['type'] = p.file.type.startsWith(
+                'video/',
+              )
+                ? 'video'
+                : 'image'
+              const mediaUrl = await uploadDiaryAttachment(
+                uid,
+                entryId,
+                attId,
+                p.file,
+              )
+              return { id: attId, type, mediaUrl }
+            }),
+          )
+        } catch {
+          showToast({
+            kind: 'sync_error',
+            message:
+              '파일 업로드에 실패했습니다. 네트워크와 Storage 규칙을 확인해 주세요.',
+          })
+          setDiarySubmitBusy(null)
+          return
+        }
+        wavePendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+        setWavePendingAttach([])
+        setDiarySubmitBusy(null)
+      } else {
+        const built = await Promise.all(
+          wavePendingAttach.map(async (p) => {
+            const dataUrl = await fileToDataUrl(p.file)
+            const type: LogAttachment['type'] = p.file.type.startsWith(
+              'video/',
+            )
+              ? 'video'
+              : 'image'
+            return {
+              id: crypto.randomUUID(),
+              type,
+              dataUrl,
+            }
+          }),
+        )
+        attachments = built
+        wavePendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+        setWavePendingAttach([])
+      }
     }
+
     const body =
       textTrim ||
       (attachments?.length ? '(미디어만 첨부한 날)' : '')
     const next: LogEntry = {
-      id: crypto.randomUUID(),
+      id: entryId,
       tag: selectedWaveTag,
       body,
       createdAt: new Date().toISOString(),
@@ -748,8 +799,12 @@ export default function MyOceanPage() {
 
   async function handleSubmitTailwind(e: React.FormEvent) {
     e.preventDefault()
+    if (diarySubmitBusy) return
     const textTrim = tailwindDraft.trim()
     if (!textTrim && twPendingAttach.length === 0) return
+
+    const entryId = crypto.randomUUID()
+
     let legId = voyageProfile.voyageLegId.trim()
     if (!legId && voyageProfile.goalName.trim()) {
       legId = crypto.randomUUID()
@@ -763,30 +818,69 @@ export default function MyOceanPage() {
         })
       }
     }
+
     let attachments: LogAttachment[] | undefined
     if (twPendingAttach.length > 0) {
-      const built = await Promise.all(
-        twPendingAttach.map(async (p) => {
-          const dataUrl = await fileToDataUrl(p.file)
-          const type: LogAttachment['type'] = p.file.type.startsWith('video/')
-            ? 'video'
-            : 'image'
-          return {
-            id: crypto.randomUUID(),
-            type,
-            dataUrl,
-          }
-        }),
-      )
-      attachments = built
-      twPendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-      setTwPendingAttach([])
+      const useStorage = Boolean(uid && isFirebaseConfigured())
+      if (useStorage) {
+        setDiarySubmitBusy('tailwind')
+        try {
+          attachments = await Promise.all(
+            twPendingAttach.map(async (p) => {
+              const attId = crypto.randomUUID()
+              const type: LogAttachment['type'] = p.file.type.startsWith(
+                'video/',
+              )
+                ? 'video'
+                : 'image'
+              const mediaUrl = await uploadDiaryAttachment(
+                uid,
+                entryId,
+                attId,
+                p.file,
+              )
+              return { id: attId, type, mediaUrl }
+            }),
+          )
+        } catch {
+          showToast({
+            kind: 'sync_error',
+            message:
+              '파일 업로드에 실패했습니다. 네트워크와 Storage 규칙을 확인해 주세요.',
+          })
+          setDiarySubmitBusy(null)
+          return
+        }
+        twPendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+        setTwPendingAttach([])
+        setDiarySubmitBusy(null)
+      } else {
+        const built = await Promise.all(
+          twPendingAttach.map(async (p) => {
+            const dataUrl = await fileToDataUrl(p.file)
+            const type: LogAttachment['type'] = p.file.type.startsWith(
+              'video/',
+            )
+              ? 'video'
+              : 'image'
+            return {
+              id: crypto.randomUUID(),
+              type,
+              dataUrl,
+            }
+          }),
+        )
+        attachments = built
+        twPendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+        setTwPendingAttach([])
+      }
     }
+
     const body =
       textTrim ||
       (attachments?.length ? '(미디어만 첨부한 날)' : '')
     const next: LogEntry = {
-      id: crypto.randomUUID(),
+      id: entryId,
       tag: 'tailwind',
       body,
       createdAt: new Date().toISOString(),
@@ -1633,6 +1727,23 @@ export default function MyOceanPage() {
               </p>
             </section>
 
+            {diarySubmitBusy && (
+              <div
+                className={`mb-4 flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-medium shadow-sm ${
+                  abyss
+                    ? 'border-sky-500/35 bg-slate-900/65 text-sky-100'
+                    : deepWater
+                      ? 'border-white/25 bg-white/15 text-white'
+                      : 'border-sky-200 bg-sky-50 text-sky-900'
+                }`}
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
+                파일을 싣는 중입니다...
+              </div>
+            )}
+
             <div className="mb-10 grid gap-4 sm:grid-cols-2">
               <section className={waveCardClass}>
                 <div className="mb-3 flex items-center gap-2">
@@ -1708,6 +1819,7 @@ export default function MyOceanPage() {
                         type="button"
                         onClick={() => waveAttachInputRef.current?.click()}
                         disabled={
+                          diarySubmitBusy !== null ||
                           wavePendingAttach.length >= MAX_LOG_ATTACHMENTS
                         }
                         className={`inline-flex min-h-[2.75rem] w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold shadow-sm transition disabled:opacity-40 ${
@@ -1767,7 +1879,8 @@ export default function MyOceanPage() {
                     <button
                       type="submit"
                       disabled={
-                        !draft.trim() && wavePendingAttach.length === 0
+                        diarySubmitBusy !== null ||
+                        (!draft.trim() && wavePendingAttach.length === 0)
                       }
                       className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm transition-colors duration-1000 ease-in-out disabled:cursor-not-allowed disabled:opacity-40 ${
                         abyss
@@ -1777,8 +1890,17 @@ export default function MyOceanPage() {
                             : 'bg-sky-600 text-white hover:bg-sky-700'
                       }`}
                     >
-                      기록하기
-                      <SendHorizontal className="h-4 w-4" />
+                      {diarySubmitBusy === 'wave' ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                          싣는 중…
+                        </>
+                      ) : (
+                        <>
+                          기록하기
+                          <SendHorizontal className="h-4 w-4" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </form>
@@ -1830,7 +1952,10 @@ export default function MyOceanPage() {
                       <button
                         type="button"
                         onClick={() => twAttachInputRef.current?.click()}
-                        disabled={twPendingAttach.length >= MAX_LOG_ATTACHMENTS}
+                        disabled={
+                          diarySubmitBusy !== null ||
+                          twPendingAttach.length >= MAX_LOG_ATTACHMENTS
+                        }
                         className={`inline-flex min-h-[2.75rem] w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold shadow-sm transition disabled:opacity-40 ${
                           abyss
                             ? 'border-amber-700/50 bg-amber-950/40 text-amber-100 hover:bg-amber-950/60'
@@ -1888,7 +2013,8 @@ export default function MyOceanPage() {
                     <button
                       type="submit"
                       disabled={
-                        !tailwindDraft.trim() && twPendingAttach.length === 0
+                        diarySubmitBusy !== null ||
+                        (!tailwindDraft.trim() && twPendingAttach.length === 0)
                       }
                       className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
                         abyss
@@ -1898,8 +2024,17 @@ export default function MyOceanPage() {
                             : 'bg-amber-500 text-white hover:bg-amber-600'
                       }`}
                     >
-                      순풍 남기기
-                      <SendHorizontal className="h-4 w-4" />
+                      {diarySubmitBusy === 'tailwind' ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                          싣는 중…
+                        </>
+                      ) : (
+                        <>
+                          순풍 남기기
+                          <SendHorizontal className="h-4 w-4" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </form>
@@ -1993,7 +2128,7 @@ export default function MyOceanPage() {
                           <DiaryMediaPreviewGrid
                             items={entry.attachments.map((a) => ({
                               type: a.type,
-                              dataUrl: a.dataUrl,
+                              src: logAttachmentSrc(a),
                             }))}
                             layout="timeline"
                             rowKeyPrefix={entry.id}

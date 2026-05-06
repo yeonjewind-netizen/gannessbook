@@ -2,7 +2,8 @@ import type { LightboxMedia } from './MediaLightbox'
 
 export type DiaryPreviewItem = {
   type: 'image' | 'video'
-  dataUrl: string
+  /** data URL 또는 Firebase Storage HTTPS URL */
+  src: string
 }
 
 type Layout = 'timeline' | 'compact' | 'admin'
@@ -44,12 +45,12 @@ export function DiaryMediaPreviewGrid({
           type="button"
           className={`group ${cellClass} cursor-zoom-in text-left transition hover:ring-2 hover:ring-sky-400/80 focus:outline-none focus:ring-2 focus:ring-sky-500`}
           onClick={() =>
-            onOpen({ type: a.type, src: a.dataUrl })
+            onOpen({ type: a.type, src: a.src })
           }
         >
           {a.type === 'video' ? (
             <video
-              src={a.dataUrl}
+              src={a.src}
               className="pointer-events-none h-full w-full object-cover"
               muted
               playsInline
@@ -57,7 +58,7 @@ export function DiaryMediaPreviewGrid({
             />
           ) : (
             <img
-              src={a.dataUrl}
+              src={a.src}
               alt=""
               className="pointer-events-none h-full w-full object-cover"
             />

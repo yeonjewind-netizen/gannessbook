@@ -5,6 +5,7 @@ import {
   approveApplication,
   getRecordCategoryTitle,
   rejectApplication,
+  storedMediaSrc,
   type RecordApplication,
 } from '../data/gannessPersistence'
 import { usePendingApplications } from '../hooks/useGannessStorage'
@@ -24,7 +25,8 @@ import {
 function MediaPreview({ app }: { app: RecordApplication }) {
   const items = app?.mediaItems ?? []
   const first = items[0]
-  if (!first?.dataUrl) {
+  const firstSrc = first ? storedMediaSrc(first) : ''
+  if (!firstSrc) {
     return (
       <div className="flex aspect-video w-full max-w-xs items-center justify-center rounded-lg bg-slate-200 text-xs text-slate-500">
         첨부 없음
@@ -34,7 +36,7 @@ function MediaPreview({ app }: { app: RecordApplication }) {
   if (first.type === 'video') {
     return (
       <video
-        src={first.dataUrl}
+        src={firstSrc}
         className="max-h-48 w-full max-w-xs rounded-lg object-contain"
         controls
         playsInline
@@ -44,7 +46,7 @@ function MediaPreview({ app }: { app: RecordApplication }) {
   }
   return (
     <img
-      src={first.dataUrl}
+      src={firstSrc}
       alt=""
       className="max-h-48 w-full max-w-xs rounded-lg object-contain"
     />
@@ -146,7 +148,11 @@ export default function AdminPage() {
                           Object.keys(app.communityCheerByEmoji).length > 0 && (
                             <p className="mt-1 text-xs text-amber-900/75">
                               {Object.entries(app.communityCheerByEmoji)
-                                .filter(([, n]) => n > 0)
+                                .filter(
+                                  (entry): entry is [string, number] =>
+                                    typeof entry[1] === 'number' &&
+                                    entry[1] > 0,
+                                )
                                 .map(([e, n]) => `${e}×${n}`)
                                 .join(' · ')}
                             </p>
@@ -218,7 +224,7 @@ export default function AdminPage() {
                                         <DiaryMediaPreviewGrid
                                           items={row.mediaItems.map((m) => ({
                                             type: m.type,
-                                            dataUrl: m.dataUrl,
+                                            src: storedMediaSrc(m),
                                           }))}
                                           layout="admin"
                                           rowKeyPrefix={row.id}

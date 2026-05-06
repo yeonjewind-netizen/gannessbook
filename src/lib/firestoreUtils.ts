@@ -19,7 +19,7 @@ import {
 } from 'firebase/firestore'
 import type { MyVoyageProfile } from '../voyage/myVoyageStorage'
 import { withSyncedVoyageDerived } from '../voyage/myVoyageStorage'
-import type { LogEntry, VoyageMeta } from '../voyage/types'
+import type { LogAttachment, LogEntry, VoyageMeta } from '../voyage/types'
 import type { MyRoutineEntry } from '../voyage/myRoutinesStorage'
 import type { CompletedVoyageArchiveEntry } from '../voyage/completedVoyagesArchive'
 import { profileFromSnapshotJson } from '../voyage/myVoyageStorage'
@@ -383,10 +383,60 @@ export async function patchArchivedVoyageRetrospective(
 
 // --- logs ---
 
+function attachmentsForFirestore(
+  list: LogEntry['attachments'],
+): Record<string, unknown>[] | undefined {
+  if (!list?.length) return undefined
+  const rows: Record<string, unknown>[] = []
+  for (const a of list) {
+    const row: Record<string, unknown> = {
+      id: a.id,
+      type: a.type,
+    }
+    const mu = a.mediaUrl?.trim()
+    const du = a.dataUrl?.trim()
+    if (mu) row.mediaUrl = mu
+    if (du) row.dataUrl = du
+    rows.push(row)
+  }
+  return rows.length ? rows : undefined
+}
+
+function parseLogAttachmentsFromFirestore(
+  raw: unknown,
+): LogAttachment[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: LogAttachment[] = []
+  for (const row of raw) {
+    if (!row || typeof row !== 'object') continue
+    const o = row as Record<string, unknown>
+    const id = typeof o.id === 'string' ? o.id.trim() : ''
+    const type =
+      o.type === 'video' ? 'video' : o.type === 'image' ? 'image' : ''
+    const mediaUrl =
+      typeof o.mediaUrl === 'string' && /^https?:\/\//i.test(o.mediaUrl.trim())
+        ? o.mediaUrl.trim()
+        : ''
+    const dataUrl =
+      typeof o.dataUrl === 'string' && o.dataUrl.startsWith('data:')
+        ? o.dataUrl
+        : ''
+    if (!id || !type || (!mediaUrl && !dataUrl)) continue
+    out.push({
+      id,
+      type,
+      ...(mediaUrl ? { mediaUrl } : {}),
+      ...(dataUrl ? { dataUrl } : {}),
+    })
+  }
+  return out.length ? out : undefined
+}
+
 function logEntryToFirestore(
   uid: string,
   e: LogEntry,
 ): Record<string, unknown> {
+  const attachments = attachmentsForFirestore(e.attachments)
   return {
     userId: uid,
     id: e.id,
@@ -395,7 +445,7 @@ function logEntryToFirestore(
     createdAt: e.createdAt,
     inspiredCount: e.inspiredCount ?? 0,
     ...(e.voyageLegId ? { voyageLegId: e.voyageLegId } : {}),
-    ...(e.attachments?.length ? { attachments: e.attachments } : {}),
+    ...(attachments?.length ? { attachments } : {}),
     updatedAt: serverTimestamp(),
   }
 }
@@ -422,9 +472,7 @@ function firestoreToLogEntry(d: Record<string, unknown>): LogEntry | null {
     typeof d.voyageLegId === 'string' && d.voyageLegId.trim()
       ? d.voyageLegId.trim()
       : undefined
-  const attachments = Array.isArray(d.attachments)
-    ? (d.attachments as LogEntry['attachments'])
-    : undefined
+  const attachments = parseLogAttachmentsFromFirestore(d.attachments)
   return {
     id,
     tag,

@@ -28,6 +28,7 @@ import {
 } from '../voyage/profileApplicantStorage'
 import { TAG_LABEL } from '../voyage/constants'
 import { formatShortDate } from '../voyage/dateFormat'
+import { logAttachmentSrc } from '../voyage/types'
 import ConstellationMap from '../components/ConstellationMap'
 import GrowthGalaxy from '../components/GrowthGalaxy'
 import {
@@ -675,7 +676,7 @@ export default function ProfilePage() {
                                   >
                                     {a.type === 'video' ? (
                                       <video
-                                        src={a.dataUrl}
+                                        src={logAttachmentSrc(a)}
                                         className="h-full w-full object-cover"
                                         controls
                                         playsInline
@@ -683,7 +684,7 @@ export default function ProfilePage() {
                                       />
                                     ) : (
                                       <img
-                                        src={a.dataUrl}
+                                        src={logAttachmentSrc(a)}
                                         alt=""
                                         className="h-full w-full object-cover"
                                       />
