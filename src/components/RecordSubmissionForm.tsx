@@ -183,15 +183,41 @@ export default function RecordSubmissionForm({
   }, [open, categories, categorySelect])
 
   const onFiles = useCallback((files: FileList | null) => {
-    if (!files?.length) return
+    const pickedFiles = files ? Array.from(files) : []
+    if (pickedFiles.length === 0) return
     setUploadEntries((prev) => [
       ...prev,
-      ...Array.from(files).map((file) => ({
+      ...pickedFiles.map((file) => ({
         id: makeUploadId(),
         file,
         url: URL.createObjectURL(file),
       })),
     ])
+  }, [])
+
+  /** 클릭 선택/드래그 앤 드롭을 완전히 같은 업로드 로직으로 통합 */
+  const handlePickedFiles = useCallback(
+    (files: FileList | null) => {
+      onFiles(files)
+    },
+    [onFiles],
+  )
+
+  /** 숨겨진 input에서 파일 선택 시 처리 */
+  const handleInputChange = useCallback(
+    (el: HTMLInputElement) => {
+      // 디버깅: 클릭 선택 경로에서 이벤트 유입 확인
+      console.log('파일 선택됨:', el.files)
+      handlePickedFiles(el.files)
+      // 같은 파일을 연속 선택해도 change 이벤트가 다시 발생하도록 초기화
+      el.value = ''
+    },
+    [handlePickedFiles],
+  )
+
+  /** 점선 박스 클릭 시 파일 탐색기 열기 */
+  const handlePickAreaClick = useCallback(() => {
+    fileInputRef.current?.click()
   }, [])
 
   const removeUpload = useCallback((id: string) => {
@@ -297,7 +323,8 @@ export default function RecordSubmissionForm({
         '신청이 접수되었습니다.\n학생회 심사 후 명예의 전당에 반영됩니다.',
       )
       onClose()
-    } catch {
+    } catch (error) {
+      console.error('Firebase 저장 에러 상세:', error)
       window.alert('저장에 실패했습니다. 잠시 후 다시 시도해 주세요.')
       setSubmitting(false)
     }
@@ -605,9 +632,9 @@ export default function RecordSubmissionForm({
             onDrop={(e) => {
               e.preventDefault()
               setDropActive(false)
-              onFiles(e.dataTransfer.files)
+              handlePickedFiles(e.dataTransfer.files)
             }}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={handlePickAreaClick}
             className={`mt-2 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-4 py-10 transition ${
               dropActive
                 ? 'border-indigo-500 bg-indigo-50/80'
@@ -630,10 +657,15 @@ export default function RecordSubmissionForm({
               type="file"
               accept="image/*,video/*"
               multiple
-              className="sr-only"
+              hidden
+              onClick={(e) => {
+                ;(e.currentTarget as any).value = null
+              }}
               onChange={(e) => {
-                onFiles(e.target.files)
-                e.target.value = ''
+                handleInputChange(e.currentTarget)
+              }}
+              onInput={(e) => {
+                handleInputChange(e.currentTarget)
               }}
             />
           </div>

@@ -15,6 +15,8 @@ import type { MoodTag } from '../voyage/types'
 import { appendRecordApprovedNotification } from '../voyage/notificationsStorage'
 import { publishVoyageMemo } from '../voyage/voyageMemoStorage'
 import { isMoodTag } from '../voyage/voyageEntries'
+import { getFirebaseStorage, isFirebaseConfigured } from '../lib/firebase'
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
 
 export const GANNESS_STORAGE_EVENT = 'ganness-storage'
 
@@ -588,6 +590,37 @@ export function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
+async function uploadRecordApplicationMedia(
+  appId: string,
+  file: File,
+): Promise<StoredMediaItem> {
+  if (!isFirebaseConfigured()) {
+    throw new Error('Firebase 설정이 완전하지 않아 Storage 업로드를 진행할 수 없습니다.')
+  }
+  const storage = getFirebaseStorage()
+  const extFromName = (() => {
+    const dot = file.name.lastIndexOf('.')
+    if (dot < 0 || dot >= file.name.length - 1) return ''
+    return file.name
+      .slice(dot + 1)
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '')
+      .slice(0, 16)
+  })()
+  const ext = extFromName ? `.${extFromName}` : file.type.startsWith('video/') ? '.mp4' : '.jpg'
+  const mediaId = `proof-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  const path = `record_applications/${appId}/${mediaId}${ext}`
+  const storageRef = ref(storage, path)
+  await uploadBytes(storageRef, file, {
+    ...(file.type ? { contentType: file.type } : {}),
+  })
+  const mediaUrl = await getDownloadURL(storageRef)
+  return {
+    type: file.type.startsWith('video/') ? 'video' : 'image',
+    mediaUrl,
+  }
+}
+
 function buildApprovedJourneyBody(app: RecordApplication): string {
   const parts: string[] = []
   const snaps = app.voyageDiarySnapshots
@@ -645,19 +678,17 @@ export async function submitRecordApplication(input: {
   crisisMethodology?: string
   submitterUserId?: string
 }): Promise<void> {
-  const mediaItems: StoredMediaItem[] = []
-  for (const file of input.files) {
-    const dataUrl = await fileToDataUrl(file)
-    const type = file.type.startsWith('video/') ? 'video' : 'image'
-    mediaItems.push({ type, dataUrl })
-  }
+  const appId = `app-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  const mediaItems = await Promise.all(
+    input.files.map((file) => uploadRecordApplicationMedia(appId, file)),
+  )
 
   const routinesIn =
     input.dailyRoutines?.map((s) => s.trim()).filter(Boolean) ?? []
   const crisisIn = input.crisisMethodology?.trim() ?? ''
 
   const app: RecordApplication = {
-    id: `app-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    id: appId,
     applicantName: input.applicantName.trim(),
     categoryId: input.categoryId,
     recordValue: input.recordValue.trim(),

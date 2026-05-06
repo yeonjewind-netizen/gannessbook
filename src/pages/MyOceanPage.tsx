@@ -1807,7 +1807,7 @@ export default function MyOceanPage() {
                         type="file"
                         accept="image/*,video/*"
                         multiple
-                        className="sr-only"
+                        hidden
                         onChange={(e) => {
                           setWavePendingAttach((prev) =>
                             appendPendingAttach(prev, e.target.files),
@@ -1822,19 +1822,19 @@ export default function MyOceanPage() {
                           diarySubmitBusy !== null ||
                           wavePendingAttach.length >= MAX_LOG_ATTACHMENTS
                         }
-                        className={`inline-flex min-h-[2.75rem] w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold shadow-sm transition disabled:opacity-40 ${
+                        className={`inline-flex min-h-[3.1rem] w-full items-center justify-center gap-2.5 rounded-2xl border px-3.5 py-3 text-sm font-bold shadow-md transition disabled:opacity-40 ${
                           abyss
-                            ? 'border-slate-500 bg-slate-800/80 text-slate-200 hover:bg-slate-700'
+                            ? 'border-sky-500/45 bg-gradient-to-r from-slate-800/90 to-slate-700/90 text-sky-100 hover:brightness-110'
                             : deepWater
-                              ? 'border-white/30 bg-white/15 text-white hover:bg-white/25'
-                              : 'border-sky-200 bg-white text-sky-900 hover:bg-sky-50'
+                              ? 'border-white/35 bg-gradient-to-r from-white/20 to-sky-200/20 text-white hover:brightness-110'
+                              : 'border-sky-300/80 bg-gradient-to-r from-sky-500 to-indigo-500 text-white hover:brightness-105'
                         }`}
                       >
-                        <ImagePlus className="h-4 w-4 shrink-0" aria-hidden />
-                        사진·영상 첨부
+                        <ImagePlus className="h-4.5 w-4.5 shrink-0" aria-hidden />
+                        사진/영상 추가
                       </button>
                       <p className={`text-center text-[11px] ${mutedTone}`}>
-                        {wavePendingAttach.length}/{MAX_LOG_ATTACHMENTS}개
+                        버튼을 누르면 갤러리/파일 탐색기가 열려요 · {wavePendingAttach.length}/{MAX_LOG_ATTACHMENTS}개
                       </p>
                       {wavePendingAttach.length > 0 && (
                         <ul
@@ -1941,7 +1941,7 @@ export default function MyOceanPage() {
                         type="file"
                         accept="image/*,video/*"
                         multiple
-                        className="sr-only"
+                        hidden
                         onChange={(e) => {
                           setTwPendingAttach((prev) =>
                             appendPendingAttach(prev, e.target.files),
@@ -1956,19 +1956,19 @@ export default function MyOceanPage() {
                           diarySubmitBusy !== null ||
                           twPendingAttach.length >= MAX_LOG_ATTACHMENTS
                         }
-                        className={`inline-flex min-h-[2.75rem] w-full items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-xs font-semibold shadow-sm transition disabled:opacity-40 ${
+                        className={`inline-flex min-h-[3.1rem] w-full items-center justify-center gap-2.5 rounded-2xl border px-3.5 py-3 text-sm font-bold shadow-md transition disabled:opacity-40 ${
                           abyss
-                            ? 'border-amber-700/50 bg-amber-950/40 text-amber-100 hover:bg-amber-950/60'
+                            ? 'border-amber-600/50 bg-gradient-to-r from-amber-900/55 to-orange-900/55 text-amber-100 hover:brightness-110'
                             : deepWater
-                              ? 'border-amber-300/40 bg-white/15 text-white hover:bg-white/25'
-                              : 'border-amber-300 bg-amber-50 text-amber-950 hover:bg-amber-100'
+                              ? 'border-amber-300/45 bg-gradient-to-r from-white/20 to-amber-200/15 text-white hover:brightness-110'
+                              : 'border-amber-300 bg-gradient-to-r from-amber-400 to-orange-500 text-white hover:brightness-105'
                         }`}
                       >
-                        <ImagePlus className="h-4 w-4 shrink-0" aria-hidden />
-                        사진·영상 첨부
+                        <ImagePlus className="h-4.5 w-4.5 shrink-0" aria-hidden />
+                        사진/영상 추가
                       </button>
                       <p className={`text-center text-[11px] ${mutedTone}`}>
-                        {twPendingAttach.length}/{MAX_LOG_ATTACHMENTS}개
+                        버튼을 누르면 갤러리/파일 탐색기가 열려요 · {twPendingAttach.length}/{MAX_LOG_ATTACHMENTS}개
                       </p>
                       {twPendingAttach.length > 0 && (
                         <ul
