@@ -15,10 +15,12 @@ import {
   type User,
 } from 'firebase/auth'
 import { getFirebaseAuth, isFirebaseConfigured } from '../lib/firebase'
+import { getUserDoc, mergeUserDoc } from '../lib/firestoreUtils'
 
 type AuthContextValue = {
   user: User | null
   loading: boolean
+  isAdmin: boolean
   firebaseReady: boolean
   signInWithGoogle: () => Promise<void>
   logout: () => Promise<void>
@@ -29,6 +31,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [isAdmin, setIsAdmin] = useState(false)
 
   useEffect(() => {
     if (!isFirebaseConfigured()) {
@@ -38,7 +41,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const auth = getFirebaseAuth()
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u)
-      setLoading(false)
+      if (!u) {
+        setIsAdmin(false)
+        setLoading(false)
+        return
+      }
+      setLoading(true)
+      void (async () => {
+        try {
+          await mergeUserDoc(u.uid, {
+            ...(u.displayName ? { displayName: u.displayName } : {}),
+            ...(u.email ? { email: u.email } : {}),
+            ...(u.photoURL ? { photoURL: u.photoURL } : {}),
+          })
+          const row = await getUserDoc(u.uid)
+          setIsAdmin(row?.isAdmin === true)
+        } catch {
+          setIsAdmin(false)
+        } finally {
+          setLoading(false)
+        }
+      })()
     })
     return unsub
   }, [])
@@ -70,11 +93,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     () => ({
       user,
       loading,
+      isAdmin,
       firebaseReady: isFirebaseConfigured(),
       signInWithGoogle,
       logout,
     }),
-    [user, loading, signInWithGoogle, logout],
+    [user, loading, isAdmin, signInWithGoogle, logout],
   )
 
   return (

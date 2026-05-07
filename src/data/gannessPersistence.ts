@@ -17,6 +17,7 @@ import { publishVoyageMemo } from '../voyage/voyageMemoStorage'
 import { isMoodTag } from '../voyage/voyageEntries'
 import { getFirebaseStorage, isFirebaseConfigured } from '../lib/firebase'
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
+import { createRecordApplicationInFirestore } from '../lib/firestoreUtils'
 
 export const GANNESS_STORAGE_EVENT = 'ganness-storage'
 
@@ -87,6 +88,8 @@ export type RecordApplication = {
   id: string
   applicantName: string
   categoryId: string
+  /** 신청 시점의 카테고리 제목 — 다른 사용자/관리자 화면 표시용 */
+  categoryTitle?: string
   recordValue: string
   journeyNote: string
   status: 'pending' | 'approved' | 'rejected'
@@ -117,7 +120,13 @@ type JourneyExtensions = Record<
 >
 type CategoryMeta = Record<
   string,
-  { status?: 'approved' | 'pending' | 'rejected' }
+  {
+    status?: 'approved' | 'pending' | 'rejected'
+    /** 관리자가 영구 삭제한 카테고리 — 숨김 처리 */
+    hidden?: boolean
+    /** 관리자가 영구 삭제한 회차(generation) 목록 — 하드코딩 + 확장 모두에 적용 */
+    hiddenGenerations?: number[]
+  }
 >
 
 function safeParse<T>(raw: string | null, fallback: T): T {
@@ -293,6 +302,10 @@ function normalizeApplicationRecord(raw: unknown): RecordApplication | null {
     typeof a.submitterUserId === 'string' && a.submitterUserId.trim()
       ? a.submitterUserId.trim()
       : undefined
+  const categoryTitle =
+    typeof a.categoryTitle === 'string' && a.categoryTitle.trim()
+      ? a.categoryTitle.trim()
+      : undefined
   return {
     id,
     applicantName:
@@ -301,6 +314,7 @@ function normalizeApplicationRecord(raw: unknown): RecordApplication | null {
         : '(이름 없음)',
     categoryId:
       typeof a.categoryId === 'string' && a.categoryId ? a.categoryId : '',
+    ...(categoryTitle ? { categoryTitle } : {}),
     recordValue:
       typeof a.recordValue === 'string' && a.recordValue.trim()
         ? a.recordValue.trim()
@@ -417,6 +431,14 @@ function normalizeRecordGenerationFromUnknown(
   const crisisMethodology =
     typeof r.crisisMethodology === 'string' && r.crisisMethodology.trim()
       ? r.crisisMethodology.trim()
+      : typeof (r as { recoveryExperience?: string }).recoveryExperience ===
+            'string' &&
+          (r as { recoveryExperience?: string }).recoveryExperience!.trim()
+        ? (r as { recoveryExperience?: string }).recoveryExperience!.trim()
+        : undefined
+  const journeyNote =
+    typeof r.journeyNote === 'string' && r.journeyNote.trim()
+      ? r.journeyNote.trim()
       : undefined
   return {
     generation,
@@ -433,6 +455,7 @@ function normalizeRecordGenerationFromUnknown(
     media: coerceRecordMedia(r.media),
     ...(dailyRoutines ? { dailyRoutines } : {}),
     ...(crisisMethodology ? { crisisMethodology } : {}),
+    ...(journeyNote ? { journeyNote } : {}),
   }
 }
 
@@ -452,10 +475,16 @@ function buildMergedCategory(
   const rawExtra = ext[cat.id]
   const extraList = Array.isArray(rawExtra) ? rawExtra : []
   const baseHistory = Array.isArray(cat.history) ? cat.history : []
+  const hiddenGenerations = new Set(
+    (metaSafe[cat.id]?.hiddenGenerations ?? []).filter(
+      (n): n is number => typeof n === 'number' && Number.isFinite(n),
+    ),
+  )
 
   const normalizedBase = baseHistory
     .map((row, i) => normalizeRecordGenerationFromUnknown(row, i + 1))
     .filter((x): x is RecordGeneration => x != null)
+    .filter((x) => !hiddenGenerations.has(x.generation))
 
   const maxGen = normalizedBase.reduce((m, h) => Math.max(m, h.generation), 0)
   const normalizedExtra = extraList
@@ -463,6 +492,7 @@ function buildMergedCategory(
       normalizeRecordGenerationFromUnknown(row, maxGen + i + 1),
     )
     .filter((x): x is RecordGeneration => x != null)
+    .filter((x) => !hiddenGenerations.has(x.generation))
 
   const mergedHistory = [...normalizedBase, ...normalizedExtra].sort(
     (a, b) => a.generation - b.generation,
@@ -487,11 +517,15 @@ export function mergeRecordCategories(): GannessRecordCategory[] {
     const metaSafe: CategoryMeta =
       meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {}
 
-    const baseMerged = GANNESS_RECORD_CATEGORIES.map((cat) =>
-      buildMergedCategory(cat, ext, metaSafe),
-    )
+    const isHidden = (id: string): boolean => metaSafe[id]?.hidden === true
 
-    const customDefs = loadCustomRecordCategoryDefs()
+    const baseMerged = GANNESS_RECORD_CATEGORIES
+      .filter((cat) => !isHidden(cat.id))
+      .map((cat) => buildMergedCategory(cat, ext, metaSafe))
+
+    const customDefs = loadCustomRecordCategoryDefs().filter(
+      (def) => !isHidden(def.id),
+    )
     const customMerged = customDefs.map((def) =>
       buildMergedCategory(
         {
@@ -668,6 +702,7 @@ function buildApprovedJourneyBody(app: RecordApplication): string {
 export async function submitRecordApplication(input: {
   applicantName: string
   categoryId: string
+  categoryTitle?: string
   recordValue: string
   journeyNote: string
   files: File[]
@@ -687,10 +722,16 @@ export async function submitRecordApplication(input: {
     input.dailyRoutines?.map((s) => s.trim()).filter(Boolean) ?? []
   const crisisIn = input.crisisMethodology?.trim() ?? ''
 
+  const resolvedCategoryTitle = (
+    input.categoryTitle?.trim() || getRecordCategoryTitle(input.categoryId)
+  ).trim()
   const app: RecordApplication = {
     id: appId,
     applicantName: input.applicantName.trim(),
     categoryId: input.categoryId,
+    ...(resolvedCategoryTitle && resolvedCategoryTitle !== input.categoryId
+      ? { categoryTitle: resolvedCategoryTitle }
+      : {}),
     recordValue: input.recordValue.trim(),
     journeyNote: input.journeyNote.trim(),
     status: 'pending',
@@ -715,6 +756,11 @@ export async function submitRecordApplication(input: {
       ? { submitterUserId: input.submitterUserId.trim() }
       : {}),
   }
+
+  await createRecordApplicationInFirestore({
+    ...app,
+    ...(app.rejectedReason ? { rejectedReason: app.rejectedReason } : {}),
+  })
 
   const apps = loadApplications()
   apps.push(app)
@@ -761,6 +807,7 @@ export function approveApplication(appId: string): boolean {
     ...(app.crisisMethodology?.trim()
       ? { crisisMethodology: app.crisisMethodology.trim() }
       : {}),
+    ...(app.journeyNote?.trim() ? { journeyNote: app.journeyNote.trim() } : {}),
   }
 
   const ext = loadHistoryExtensions()
@@ -817,4 +864,166 @@ export function rejectApplication(appId: string, reason: string): boolean {
   saveApplications(apps)
   notifyGannessStorage()
   return true
+}
+
+/**
+ * 관리자 페이지에서 Firestore 신청서를 승인할 때 호출.
+ * 로컬 storage에 신청서가 없으면 먼저 ingest 한 뒤 approveApplication() 을 호출해
+ * 명예의 전당 UI(localStorage 기반)도 즉시 반영되게 한다.
+ */
+export function ingestAndApproveRemoteApplication(input: {
+  id: string
+  applicantName: string
+  categoryId: string
+  recordValue: string
+  journeyNote: string
+  rejectedReason?: string
+  mediaItems: Array<{
+    type: 'image' | 'video'
+    mediaUrl?: string
+    dataUrl?: string
+  }>
+  createdAt: number
+  voyageDiarySnapshots?: unknown
+  communityCheerTotal?: number
+  communityCheerByEmoji?: Record<string, number>
+  dailyRoutines?: string[]
+  crisisMethodology?: string
+  submitterUserId?: string
+  categoryTitle?: string
+}): boolean {
+  const normalized = normalizeApplicationRecord({
+    ...input,
+    status: 'pending',
+  })
+  if (!normalized) return false
+
+  if (input.categoryTitle?.trim()) {
+    const customs = loadCustomRecordCategoryDefs()
+    const exists = customs.find((c) => c.id === normalized.categoryId)
+    const isBuiltin = GANNESS_RECORD_CATEGORIES.some(
+      (c) => c.id === normalized.categoryId,
+    )
+    if (!exists && !isBuiltin) {
+      customs.push({
+        id: normalized.categoryId,
+        title: input.categoryTitle.trim(),
+        createdAt: normalized.createdAt || Date.now(),
+      })
+      saveCustomRecordCategoryDefs(customs)
+    }
+  }
+
+  const apps = loadApplications()
+  const idx = apps.findIndex((a) => a.id === normalized.id)
+  if (idx < 0) {
+    apps.push(normalized)
+  } else if (apps[idx].status === 'approved') {
+    return true
+  } else {
+    apps[idx] = normalized
+  }
+  saveApplications(apps)
+  return approveApplication(normalized.id)
+}
+
+/** 관리자: 영구 삭제 시 로컬 흔적도 정리 */
+export function purgeApplicationLocally(appId: string): void {
+  const apps = loadApplications()
+  const next = apps.filter((a) => a.id !== appId)
+  if (next.length !== apps.length) {
+    saveApplications(next)
+    notifyGannessStorage()
+  }
+}
+
+/**
+ * 관리자: 명예의 전당에서 카테고리(기록) 영구 삭제 시 로컬 캐시 정리.
+ * 하드코딩된 베이스 카테고리는 제거할 수 없으므로 `hidden: true` 플래그를 남겨
+ * UI에서 사라지게 한다. 사용자 정의 카테고리는 곧장 제거.
+ */
+export function purgeRecordCategoryLocally(categoryId: string): void {
+  const cid = categoryId.trim()
+  if (!cid) return
+
+  const ext = loadHistoryExtensions()
+  if (ext[cid]) {
+    delete ext[cid]
+    saveHistoryExtensions(ext)
+  }
+
+  const isBuiltin = GANNESS_RECORD_CATEGORIES.some((c) => c.id === cid)
+  const meta = loadCategoryMeta()
+  if (isBuiltin) {
+    meta[cid] = {
+      ...(meta[cid] ?? {}),
+      hidden: true,
+    }
+  } else if (meta[cid]) {
+    delete meta[cid]
+  }
+  saveCategoryMeta(meta)
+
+  if (!isBuiltin) {
+    const customs = loadCustomRecordCategoryDefs()
+    const customsNext = customs.filter((c) => c.id !== cid)
+    if (customsNext.length !== customs.length) {
+      saveCustomRecordCategoryDefs(customsNext)
+    }
+  }
+
+  const apps = loadApplications()
+  const appsNext = apps.filter((a) => a.categoryId !== cid)
+  if (appsNext.length !== apps.length) {
+    saveApplications(appsNext)
+  }
+
+  notifyGannessStorage()
+}
+
+/**
+ * 관리자: 특정 회차(generation) 한 줄만 영구 삭제.
+ * - 사용자 신청으로 추가된 행이면 history-extensions에서 제거.
+ * - 어느 행이든 `hiddenGenerations`에 등록해 하드코딩 베이스 행도 화면에서 사라지게 한다.
+ */
+export function removeTimelineRowLocally(
+  categoryId: string,
+  generation: number,
+): void {
+  const cid = categoryId.trim()
+  if (!cid || !Number.isFinite(generation)) return
+
+  const ext = loadHistoryExtensions()
+  const list = Array.isArray(ext[cid]) ? ext[cid] : []
+  const nextExt = list.filter((row) => {
+    const g =
+      row && typeof row === 'object' && typeof row.generation === 'number'
+        ? row.generation
+        : null
+    return g !== generation
+  })
+  if (nextExt.length !== list.length) {
+    if (nextExt.length > 0) {
+      ext[cid] = nextExt
+    } else {
+      delete ext[cid]
+    }
+    saveHistoryExtensions(ext)
+  }
+
+  const meta = loadCategoryMeta()
+  const existing = meta[cid] ?? {}
+  const hiddenSet = new Set(
+    (existing.hiddenGenerations ?? []).filter(
+      (n): n is number => typeof n === 'number' && Number.isFinite(n),
+    ),
+  )
+  hiddenSet.add(generation)
+  meta[cid] = {
+    ...existing,
+    hiddenGenerations: Array.from(hiddenSet).sort((a, b) => a - b),
+  }
+  saveCategoryMeta(meta)
+
+  notifyGannessStorage()
 }

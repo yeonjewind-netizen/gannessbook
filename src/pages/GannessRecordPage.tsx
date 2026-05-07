@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { BookOpen, Trophy, X } from 'lucide-react'
+import { BookOpen, Trash2, Trophy, X } from 'lucide-react'
 import {
   GANNESS_RECORD_CATEGORIES,
   coerceRecordMedia,
@@ -12,7 +12,10 @@ import {
 } from '../data/gannessRecords'
 import {
   getMergedJourneyLog,
+  purgeRecordCategoryLocally,
+  removeTimelineRowLocally,
   storedMediaSrc,
+  type VoyageDiarySnapshotItem,
 } from '../data/gannessPersistence'
 import { useMergedRecordCategories } from '../hooks/useGannessStorage'
 import RecordSubmissionForm, {
@@ -34,6 +37,16 @@ import LighthouseToggleButton from '../components/LighthouseToggleButton'
 import { getOrCreateUserId } from '../voyage/userIdentity'
 import { getVoyageMemo } from '../voyage/voyageMemoStorage'
 import { addMyRoutine } from '../voyage/myRoutinesStorage'
+import { useAuth } from '../context/AuthContext'
+import {
+  deleteRecordApplication,
+  deleteRecordDoc,
+  listPendingApplicationsByCategoryId,
+  removeTimelineRowFromRecord,
+  type FirestoreRecordApplication,
+} from '../lib/firestoreUtils'
+import type { MoodTag } from '../voyage/types'
+import { TAG_LABEL } from '../voyage/constants'
 
 /** 명예 기록 선배/동료를 등대로 등록할 때 쓰는 안정적인 userId */
 function lighthouseTargetFromHolder(
@@ -58,7 +71,29 @@ function mergedLogbookForHolder(holder: RecordGeneration) {
     holder.crisisMethodology?.trim() ||
     fromStore?.crisisMethodology?.trim() ||
     ''
-  return { routines, methodology }
+  const journeyNote = holder.journeyNote?.trim() || ''
+  return { routines, methodology, journeyNote }
+}
+
+/** 비망록 — moodTag로 분류한 일지 묶음 */
+type ClassifiedSnapshots = {
+  tailwinds: VoyageDiarySnapshotItem[]
+  waves: VoyageDiarySnapshotItem[]
+  all: VoyageDiarySnapshotItem[]
+}
+
+function classifySnapshots(
+  snaps: VoyageDiarySnapshotItem[] | undefined,
+): ClassifiedSnapshots {
+  const all = snaps ?? []
+  const tailwinds: VoyageDiarySnapshotItem[] = []
+  const waves: VoyageDiarySnapshotItem[] = []
+  for (const s of all) {
+    const m: MoodTag | undefined = s.moodTag
+    if (m === 'passion' || m === 'tailwind') tailwinds.push(s)
+    else if (m === 'wall' || m === 'direction') waves.push(s)
+  }
+  return { tailwinds, waves, all }
 }
 
 function asCategoryArray(v: unknown): GannessRecordCategory[] {
@@ -142,6 +177,7 @@ function DetailHeroMedia({
 export default function GannessRecordPage() {
   const navigate = useNavigate()
   const location = useLocation()
+  const { isAdmin } = useAuth()
   const recordCategories = useMergedRecordCategories()
   const safeRecordCategories = useMemo(
     () => asCategoryArray(recordCategories),
@@ -162,6 +198,14 @@ export default function GannessRecordPage() {
   const [detailModalTab, setDetailModalTab] = useState<'overview' | 'logbook'>(
     'overview',
   )
+  const [pendingFallback, setPendingFallback] = useState<
+    FirestoreRecordApplication | null
+  >(null)
+  const [pendingFallbackLoading, setPendingFallbackLoading] = useState(false)
+  const [detailLightbox, setDetailLightbox] = useState<LightboxMedia | null>(
+    null,
+  )
+  const [adminBusy, setAdminBusy] = useState(false)
 
   const copyRoutineToMyChecklist = useCallback(
     (line: string, holder: RecordGeneration) => {
@@ -226,6 +270,102 @@ export default function GannessRecordPage() {
   useEffect(() => {
     if (detailCategory) setDetailModalTab('overview')
   }, [detailCategory?.id])
+
+  useEffect(() => {
+    setPendingFallback(null)
+    if (!resolvedDetail) return
+    const hist = asHistoryArray(resolvedDetail.history)
+    if (resolvedDetail.status !== 'pending' || hist.length > 0) return
+    let alive = true
+    setPendingFallbackLoading(true)
+    void (async () => {
+      try {
+        const apps = await listPendingApplicationsByCategoryId(
+          resolvedDetail.id,
+        )
+        if (!alive) return
+        setPendingFallback(apps[0] ?? null)
+      } catch (error) {
+        if (!alive) return
+        console.warn('심사 중 신청 정보 로드 실패:', error)
+        setPendingFallback(null)
+      } finally {
+        if (alive) setPendingFallbackLoading(false)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [resolvedDetail?.id, resolvedDetail?.status, resolvedDetail?.history])
+
+  const handleAdminDelete = useCallback(
+    async (cat: GannessRecordCategory) => {
+      if (
+        !window.confirm(
+          '정말 이 기록을 영구적으로 삭제하시겠습니까?\n\n복구할 수 없으며, 명예의 전당과 심사 대기열에서 모두 사라집니다.',
+        )
+      )
+        return
+      setAdminBusy(true)
+      try {
+        try {
+          await deleteRecordDoc(cat.id)
+        } catch (err) {
+          console.warn('records 문서 삭제 실패(무시):', err)
+        }
+        try {
+          const pendings = await listPendingApplicationsByCategoryId(cat.id)
+          await Promise.allSettled(
+            pendings.map((p) => deleteRecordApplication(p.id)),
+          )
+        } catch (err) {
+          console.warn('심사 대기 신청 삭제 실패(무시):', err)
+        }
+        try {
+          purgeRecordCategoryLocally(cat.id)
+        } catch (err) {
+          console.warn('localStorage 정리 실패(무시):', err)
+        }
+        setDetailCategory(null)
+      } catch (error) {
+        console.error('기록 영구 삭제 실패:', error)
+        window.alert('삭제 처리 중 오류가 발생했습니다.')
+      } finally {
+        setAdminBusy(false)
+      }
+    },
+    [],
+  )
+
+  const handleAdminDeleteRow = useCallback(
+    async (categoryId: string, generation: number, name: string) => {
+      if (
+        !window.confirm(
+          `정말 이 회차 기록을 영구적으로 삭제하시겠습니까?\n\n${generation}대 · ${name}`,
+        )
+      )
+        return
+      setAdminBusy(true)
+      try {
+        try {
+          await removeTimelineRowFromRecord(categoryId, generation)
+        } catch (err) {
+          console.warn('Firestore 타임라인 삭제 실패(무시):', err)
+        }
+        try {
+          removeTimelineRowLocally(categoryId, generation)
+        } catch (err) {
+          console.warn('localStorage 타임라인 정리 실패(무시):', err)
+        }
+      } catch (error) {
+        console.error('회차 기록 삭제 실패:', error)
+        window.alert('회차 삭제 처리 중 오류가 발생했습니다.')
+      } finally {
+        setAdminBusy(false)
+      }
+    },
+    [],
+  )
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-sky-50 via-indigo-50/40 to-slate-100 pb-36 pt-8">
@@ -330,6 +470,11 @@ export default function GannessRecordPage() {
           className="fixed inset-0 z-[80] flex items-end justify-center sm:items-center"
           role="presentation"
         >
+          <MediaLightbox
+            open={detailLightbox != null}
+            media={detailLightbox}
+            onClose={() => setDetailLightbox(null)}
+          />
           <button
             type="button"
             className="absolute inset-0 bg-slate-900/55 backdrop-blur-[2px] transition-opacity"
@@ -356,18 +501,170 @@ export default function GannessRecordPage() {
               const current = getCurrentHolder(hist)
               const timelineRaw = getHistoryChronological(hist)
               const timeline = Array.isArray(timelineRaw) ? timelineRaw : []
+              const isPendingPreview =
+                cat?.status === 'pending' && timeline.length === 0
+              const pendingMedia = pendingFallback?.mediaItems[0]
+              const pendingMediaUrl = pendingMedia
+                ? storedMediaSrc(pendingMedia)
+                : ''
+              const pendingHero: RecordMedia | null = pendingMediaUrl
+                ? {
+                    type:
+                      pendingMedia?.type === 'video' ? 'video' : 'image',
+                    url: pendingMediaUrl,
+                  }
+                : null
               return (
                 <>
                   <div className="relative shrink-0 overflow-hidden bg-black">
-                    <DetailHeroMedia media={current?.media} />
+                    <DetailHeroMedia
+                      media={
+                        isPendingPreview && pendingHero
+                          ? pendingHero
+                          : current?.media
+                      }
+                    />
                   </div>
                   <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4">
-                    <h2
-                      id="record-detail-title"
-                      className="pr-10 text-lg font-bold leading-snug text-slate-900"
-                    >
-                      {cat?.title ?? '—'}
-                    </h2>
+                    <div className="flex items-start justify-between gap-2 pr-10">
+                      <h2
+                        id="record-detail-title"
+                        className="text-lg font-bold leading-snug text-slate-900"
+                      >
+                        {cat?.title ?? '—'}
+                      </h2>
+                      {isAdmin && cat?.id && (
+                        <button
+                          type="button"
+                          onClick={() => void handleAdminDelete(cat)}
+                          disabled={adminBusy}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-800 shadow-sm hover:bg-rose-100 disabled:opacity-60"
+                          aria-label="이 기록 영구 삭제"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                          삭제
+                        </button>
+                      )}
+                    </div>
+                    {isPendingPreview ? (
+                      <div className="mt-4 space-y-4">
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full bg-amber-200 px-2 py-0.5 text-[11px] font-bold text-amber-950">
+                            심사 중
+                          </span>
+                          {pendingFallbackLoading && (
+                            <span className="text-xs text-slate-500">
+                              로딩 중...
+                            </span>
+                          )}
+                        </div>
+                        {pendingFallback ? (
+                          <>
+                            <div className="rounded-xl border border-amber-200/80 bg-amber-50/60 p-3 text-sm">
+                              <p className="font-semibold text-slate-900">
+                                {pendingFallback.applicantName}
+                              </p>
+                              <p className="mt-1 text-indigo-800">
+                                제출 기록 ·{' '}
+                                <span className="font-bold">
+                                  {pendingFallback.recordValue}
+                                </span>
+                              </p>
+                              <p className="mt-1 text-xs text-slate-500">
+                                접수 ·{' '}
+                                {new Date(
+                                  pendingFallback.createdAt,
+                                ).toLocaleString('ko-KR', {
+                                  dateStyle: 'medium',
+                                  timeStyle: 'short',
+                                })}
+                              </p>
+                            </div>
+                            {pendingFallback.dailyRoutines &&
+                              pendingFallback.dailyRoutines.filter((s) =>
+                                s.trim(),
+                              ).length > 0 && (
+                                <div className="overflow-hidden rounded-xl border border-sky-200/90 bg-gradient-to-br from-sky-50 to-white shadow-sm">
+                                  <div className="border-b border-sky-100 bg-sky-100/50 px-3 py-2">
+                                    <p className="text-xs font-bold uppercase tracking-wider text-sky-900">
+                                      나의 루틴 & 습관
+                                    </p>
+                                    <p className="mt-0.5 text-[11px] text-sky-900/85">
+                                      기록 달성을 위해 반복한 행동들
+                                    </p>
+                                  </div>
+                                  <ul className="divide-y divide-sky-100/80">
+                                    {pendingFallback.dailyRoutines.filter((s) =>
+                                      s.trim(),
+                                    ).map((line, i) => (
+                                      <li
+                                        key={`pf-r-${i}`}
+                                        className="px-3 py-2 text-sm leading-relaxed text-slate-800"
+                                      >
+                                        <span className="mr-2 font-bold text-sky-700">
+                                          {i + 1}.
+                                        </span>
+                                        {line.trim()}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            {pendingFallback.crisisMethodology?.trim() && (
+                              <div className="overflow-hidden rounded-xl border border-rose-200/90 bg-gradient-to-br from-rose-50/90 to-white shadow-sm">
+                                <div className="border-b border-rose-100 bg-rose-50/80 px-3 py-2">
+                                  <p className="text-xs font-bold uppercase tracking-wider text-rose-900">
+                                    파도를 넘는 법
+                                  </p>
+                                  <p className="mt-0.5 text-[11px] text-rose-900/85">
+                                    실패했을 때 다시 일어났던 구체적인 경험과 방법
+                                  </p>
+                                </div>
+                                <p className="whitespace-pre-wrap px-3 py-3 text-sm leading-relaxed text-slate-800">
+                                  {pendingFallback.crisisMethodology.trim()}
+                                </p>
+                              </div>
+                            )}
+                            {pendingFallback.journeyNote?.trim() && (
+                              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 text-sm">
+                                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                                  항해사 소감
+                                </p>
+                                <p className="mt-1 whitespace-pre-wrap leading-relaxed text-slate-800">
+                                  {pendingFallback.journeyNote}
+                                </p>
+                              </div>
+                            )}
+                            {pendingFallback.mediaItems.length > 0 && (
+                              <div>
+                                <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">
+                                  증명 자료
+                                </p>
+                                <DiaryMediaPreviewGrid
+                                  items={pendingFallback.mediaItems.map(
+                                    (m) => ({
+                                      type: m.type,
+                                      src: storedMediaSrc(m),
+                                    }),
+                                  )}
+                                  layout="compact"
+                                  rowKeyPrefix={pendingFallback.id}
+                                  onOpen={setDetailLightbox}
+                                />
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          !pendingFallbackLoading && (
+                            <p className="rounded-xl border border-dashed border-amber-200 bg-amber-50/70 px-4 py-6 text-center text-sm text-amber-900">
+                              아직 등재되지 않은 기록입니다. 학생회의 심사가 끝나면
+                              1대 기록자가 등재됩니다.
+                            </p>
+                          )
+                        )}
+                      </div>
+                    ) : (
+                      <>
                     <p className="mt-1 text-sm text-slate-600">
                       현재 {current?.generation ?? '—'}대 ·{' '}
                       <span className="font-semibold text-indigo-700">
@@ -411,6 +708,48 @@ export default function GannessRecordPage() {
 
                     {detailModalTab === 'overview' ? (
                       <>
+                    {(() => {
+                      const lb = mergedLogbookForHolder(current)
+                      const log = getMergedJourneyLog(current?.journeyId)
+                      const headline = log?.headline?.trim() ?? ''
+                      const body = log?.body?.trim() ?? ''
+                      const reflectionOnly =
+                        !body && lb.journeyNote.trim().length > 0
+                      if (
+                        !headline &&
+                        !body &&
+                        !reflectionOnly
+                      )
+                        return null
+                      return (
+                        <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4 text-sm">
+                          <p className="text-xs font-bold uppercase tracking-wider text-indigo-700">
+                            현재 기록자의 항해
+                          </p>
+                          {headline && (
+                            <p className="mt-1.5 text-sm font-semibold text-slate-900">
+                              {headline}
+                            </p>
+                          )}
+                          {body && (
+                            <p className="mt-2 whitespace-pre-wrap leading-relaxed text-slate-700">
+                              {body}
+                            </p>
+                          )}
+                          {reflectionOnly && (
+                            <>
+                              <p className="mt-3 text-xs font-bold uppercase tracking-wider text-indigo-700">
+                                항해사 소감
+                              </p>
+                              <p className="mt-1.5 whitespace-pre-wrap leading-relaxed text-slate-700">
+                                {lb.journeyNote}
+                              </p>
+                            </>
+                          )}
+                        </div>
+                      )
+                    })()}
+
                     <button
                       type="button"
                       onClick={() => {
@@ -449,6 +788,11 @@ export default function GannessRecordPage() {
                       {timeline.map((row, tIdx) => {
                         const thumb = coerceRecordMedia(row?.media)
                         const rk = `${cat?.id ?? 'cat'}-${row?.generation ?? tIdx}-${row?.journeyId ?? tIdx}`
+                        const rowGen =
+                          typeof row?.generation === 'number' &&
+                          Number.isFinite(row.generation)
+                            ? row.generation
+                            : null
                         return (
                         <li
                           key={rk}
@@ -491,17 +835,40 @@ export default function GannessRecordPage() {
                                 <p className="mt-1 text-sm font-bold tabular-nums text-indigo-700">
                                   {row?.recordValue ?? '—'}
                                 </p>
-                                <button
-                                  type="button"
-                                  onClick={() => setJourneyOpen(row)}
-                                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-sky-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50"
-                                >
-                                  <BookOpen
-                                    className="h-3.5 w-3.5 shrink-0"
-                                    aria-hidden
-                                  />
-                                  이 선원의 항해 일지 보기
-                                </button>
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => setJourneyOpen(row)}
+                                    className="inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-sky-800 shadow-sm transition hover:border-sky-300 hover:bg-sky-50"
+                                  >
+                                    <BookOpen
+                                      className="h-3.5 w-3.5 shrink-0"
+                                      aria-hidden
+                                    />
+                                    이 선원의 항해 일지 보기
+                                  </button>
+                                  {isAdmin && cat?.id && rowGen != null && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void handleAdminDeleteRow(
+                                          cat.id,
+                                          rowGen,
+                                          row?.name ?? '',
+                                        )
+                                      }
+                                      disabled={adminBusy}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2 py-1.5 text-xs font-bold text-rose-800 shadow-sm transition hover:bg-rose-100 disabled:opacity-60"
+                                      aria-label="이 회차 기록 삭제"
+                                    >
+                                      <Trash2
+                                        className="h-3.5 w-3.5 shrink-0"
+                                        aria-hidden
+                                      />
+                                      삭제
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           </div>
@@ -513,15 +880,22 @@ export default function GannessRecordPage() {
                     ) : (
                       <div className="mt-5 space-y-4">
                         {(() => {
-                          const { routines, methodology } =
+                          const { routines, methodology, journeyNote } =
                             mergedLogbookForHolder(current)
+                          const log = getMergedJourneyLog(current?.journeyId)
+                          const snaps = log?.voyageDiarySnapshots
+                          const { tailwinds, waves, all } =
+                            classifySnapshots(snaps)
                           const has =
-                            routines.length > 0 || methodology.trim().length > 0
+                            routines.length > 0 ||
+                            methodology.trim().length > 0 ||
+                            journeyNote.trim().length > 0 ||
+                            all.length > 0
                           if (!has) {
                             return (
                               <p className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                                아직 공개된 비망록이 없어요. 기록 신청 시 데일리 루틴과
-                                태풍 극복 방법을 적으면 여기에 표시됩니다.
+                                아직 공개된 비망록이 없어요. 기록 신청 시 나의 루틴·습관,
+                                파도를 넘는 법, 소감을 적으면 여기에 표시됩니다.
                               </p>
                             )
                           }
@@ -531,10 +905,10 @@ export default function GannessRecordPage() {
                                 <div className="overflow-hidden rounded-2xl border border-sky-200/90 bg-gradient-to-br from-sky-50 to-white shadow-sm">
                                   <div className="border-b border-sky-100 bg-sky-100/50 px-4 py-2.5">
                                     <p className="text-xs font-bold uppercase tracking-wider text-sky-900">
-                                      데일리 루틴
+                                      나의 루틴 & 습관
                                     </p>
                                     <p className="mt-0.5 text-[11px] text-sky-800/90">
-                                      목표를 위해 매일 지켜 온 습관
+                                      기록 달성을 위해 반복한 행동들
                                     </p>
                                   </div>
                                   <ul className="divide-y divide-sky-100/80">
@@ -569,10 +943,10 @@ export default function GannessRecordPage() {
                                 <div className="overflow-hidden rounded-2xl border border-rose-200/90 bg-gradient-to-br from-rose-50/90 to-white shadow-sm">
                                   <div className="border-b border-rose-100 bg-rose-50/80 px-4 py-2.5">
                                     <p className="text-xs font-bold uppercase tracking-wider text-rose-900">
-                                      태풍을 넘기며
+                                      파도를 넘는 법
                                     </p>
                                     <p className="mt-0.5 text-[11px] text-rose-900/85">
-                                      위기 속 나만의 극복 방법
+                                      실패했을 때 다시 일어났던 구체적인 경험과 방법
                                     </p>
                                   </div>
                                   <p className="whitespace-pre-wrap px-4 py-4 text-sm leading-relaxed text-slate-800">
@@ -580,10 +954,165 @@ export default function GannessRecordPage() {
                                   </p>
                                 </div>
                               )}
+                              {journeyNote.trim().length > 0 && (
+                                <div className="overflow-hidden rounded-2xl border border-indigo-200/90 bg-gradient-to-br from-indigo-50/80 to-white shadow-sm">
+                                  <div className="border-b border-indigo-100 bg-indigo-50/70 px-4 py-2.5">
+                                    <p className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                                      항해사 소감
+                                    </p>
+                                    <p className="mt-0.5 text-[11px] text-indigo-900/85">
+                                      기록 전체에 대한 소감
+                                    </p>
+                                  </div>
+                                  <p className="whitespace-pre-wrap px-4 py-4 text-sm leading-relaxed text-slate-800">
+                                    {journeyNote}
+                                  </p>
+                                </div>
+                              )}
+                              {tailwinds.length > 0 && (
+                                <div className="overflow-hidden rounded-2xl border border-emerald-200/90 bg-gradient-to-br from-emerald-50/80 to-white shadow-sm">
+                                  <div className="border-b border-emerald-100 bg-emerald-50/80 px-4 py-2.5">
+                                    <p className="text-xs font-bold uppercase tracking-wider text-emerald-900">
+                                      ⛵ 우리가 만난 순풍
+                                    </p>
+                                    <p className="mt-0.5 text-[11px] text-emerald-800/90">
+                                      목표에 한 발 더 가까워진 순간
+                                    </p>
+                                  </div>
+                                  <ul className="divide-y divide-emerald-100/70">
+                                    {tailwinds.map((s) => (
+                                      <li key={s.id} className="px-4 py-3">
+                                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-emerald-900/80">
+                                          <time dateTime={s.createdAt}>
+                                            {new Date(s.createdAt).toLocaleString(
+                                              'ko-KR',
+                                              {
+                                                dateStyle: 'medium',
+                                                timeStyle: 'short',
+                                              },
+                                            )}
+                                          </time>
+                                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold">
+                                            {s.moodTag
+                                              ? TAG_LABEL[s.moodTag]
+                                              : s.tag}
+                                          </span>
+                                        </div>
+                                        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                                          {s.body}
+                                        </p>
+                                        {s.mediaItems &&
+                                          s.mediaItems.length > 0 && (
+                                            <div className="mt-2">
+                                              <DiaryMediaPreviewGrid
+                                                items={s.mediaItems.map(
+                                                  (m) => ({
+                                                    type: m.type,
+                                                    src: storedMediaSrc(m),
+                                                  }),
+                                                )}
+                                                layout="compact"
+                                                rowKeyPrefix={`tw-${s.id}`}
+                                                onOpen={setDetailLightbox}
+                                              />
+                                            </div>
+                                          )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {waves.length > 0 && (
+                                <div className="overflow-hidden rounded-2xl border border-amber-200/90 bg-gradient-to-br from-amber-50/80 to-white shadow-sm">
+                                  <div className="border-b border-amber-100 bg-amber-50/80 px-4 py-2.5">
+                                    <p className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                                      🌊 우리가 만난 파도와 태풍
+                                    </p>
+                                    <p className="mt-0.5 text-[11px] text-amber-800/90">
+                                      흔들리고 다시 일어선 시간
+                                    </p>
+                                  </div>
+                                  <ul className="divide-y divide-amber-100/70">
+                                    {waves.map((s) => (
+                                      <li key={s.id} className="px-4 py-3">
+                                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-900/80">
+                                          <time dateTime={s.createdAt}>
+                                            {new Date(s.createdAt).toLocaleString(
+                                              'ko-KR',
+                                              {
+                                                dateStyle: 'medium',
+                                                timeStyle: 'short',
+                                              },
+                                            )}
+                                          </time>
+                                          <span className="rounded-full bg-amber-100 px-2 py-0.5 font-semibold">
+                                            {s.moodTag
+                                              ? TAG_LABEL[s.moodTag]
+                                              : s.tag}
+                                          </span>
+                                        </div>
+                                        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                                          {s.body}
+                                        </p>
+                                        {s.mediaItems &&
+                                          s.mediaItems.length > 0 && (
+                                            <div className="mt-2">
+                                              <DiaryMediaPreviewGrid
+                                                items={s.mediaItems.map(
+                                                  (m) => ({
+                                                    type: m.type,
+                                                    src: storedMediaSrc(m),
+                                                  }),
+                                                )}
+                                                layout="compact"
+                                                rowKeyPrefix={`wv-${s.id}`}
+                                                onOpen={setDetailLightbox}
+                                              />
+                                            </div>
+                                          )}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                              {all.length > 0 && (
+                                <details className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                                  <summary className="cursor-pointer list-none border-b border-slate-100 bg-slate-50/80 px-4 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-700">
+                                    📓 전체 항해 일지 보기 · {all.length}편
+                                  </summary>
+                                  <ol className="divide-y divide-slate-100">
+                                    {all.map((s) => (
+                                      <li key={`all-${s.id}`} className="px-4 py-3">
+                                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+                                          <time dateTime={s.createdAt}>
+                                            {new Date(s.createdAt).toLocaleString(
+                                              'ko-KR',
+                                              {
+                                                dateStyle: 'medium',
+                                                timeStyle: 'short',
+                                              },
+                                            )}
+                                          </time>
+                                          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-700">
+                                            {s.moodTag
+                                              ? TAG_LABEL[s.moodTag]
+                                              : s.tag}
+                                          </span>
+                                        </div>
+                                        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                                          {s.body}
+                                        </p>
+                                      </li>
+                                    ))}
+                                  </ol>
+                                </details>
+                              )}
                             </>
                           )
                         })()}
                       </div>
+                    )}
+                      </>
                     )}
                   </div>
                 </>
@@ -640,6 +1169,19 @@ export default function GannessRecordPage() {
             {(() => {
               const log = getMergedJourneyLog(journeyOpen?.journeyId)
               const snaps = log?.voyageDiarySnapshots ?? []
+              const lb = journeyOpen
+                ? mergedLogbookForHolder(journeyOpen)
+                : { routines: [] as string[], methodology: '', journeyNote: '' }
+              const hasStructured =
+                lb.routines.length > 0 ||
+                lb.methodology.trim().length > 0 ||
+                lb.journeyNote.trim().length > 0
+              const showCompositeBody = Boolean(log?.body?.trim()) && !hasStructured
+              const showEmptyHint =
+                !hasStructured &&
+                !showCompositeBody &&
+                snaps.length === 0
+
               return (
                 <>
                   <p
@@ -651,10 +1193,65 @@ export default function GannessRecordPage() {
                   <p className="mt-1 text-xs font-medium text-slate-500">
                     항해 일지 ID · {journeyOpen?.journeyId ?? '—'}
                   </p>
-                  <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-                    {log?.body ??
-                      '이 선원의 상세 항해 일지는 준비 중입니다. 곧 기록실에 채워집니다.'}
-                  </p>
+
+                  {lb.routines.length > 0 && (
+                    <div className="mt-5 rounded-xl border border-sky-200 bg-sky-50/60 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-sky-900">
+                        나의 루틴 & 습관
+                      </p>
+                      <p className="mt-1 text-[11px] text-sky-900/80">
+                        기록 달성을 위해 반복한 행동들
+                      </p>
+                      <ul className="mt-3 space-y-2 text-sm leading-relaxed text-slate-800">
+                        {lb.routines.map((line, i) => (
+                          <li key={`jd-r-${i}`}>
+                            <span className="mr-2 font-bold text-sky-800">
+                              {i + 1}.
+                            </span>
+                            {line}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {lb.methodology.trim().length > 0 && (
+                    <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50/60 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-rose-900">
+                        파도를 넘는 법
+                      </p>
+                      <p className="mt-1 text-[11px] text-rose-900/85">
+                        실패했을 때 다시 일어났던 구체적인 경험과 방법
+                      </p>
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                        {lb.methodology}
+                      </p>
+                    </div>
+                  )}
+
+                  {lb.journeyNote.trim().length > 0 && (
+                    <div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/50 p-4">
+                      <p className="text-xs font-bold uppercase tracking-wider text-indigo-900">
+                        항해사 소감
+                      </p>
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-slate-800">
+                        {lb.journeyNote}
+                      </p>
+                    </div>
+                  )}
+
+                  {showCompositeBody && (
+                    <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                      {log?.body}
+                    </p>
+                  )}
+
+                  {showEmptyHint && (
+                    <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-600">
+                      이 선원의 상세 항해 일지는 준비 중입니다. 곧 기록실에 채워집니다.
+                    </p>
+                  )}
+
                   {snaps.length > 0 && (
                     <div className="mt-6 space-y-5 border-t border-slate-100 pt-5">
                       <p className="text-xs font-bold uppercase tracking-wide text-slate-500">

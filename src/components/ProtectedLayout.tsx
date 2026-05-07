@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { useAdminMode } from '../hooks/useGannessStorage'
 import { flushRoutineAchievementInboxForCurrentUser } from '../voyage/routineAchievementInbox'
 import { BottomNav } from './BottomNav'
 import { NotificationBell } from './NotificationBell'
@@ -14,9 +13,9 @@ function RoutineInboxBoot() {
 }
 
 function AdminEntryChip() {
-  const { enabled } = useAdminMode()
+  const { isAdmin } = useAuth()
   const location = useLocation()
-  if (!enabled || location.pathname === '/admin') return null
+  if (!isAdmin || location.pathname === '/admin') return null
   return (
     <Link
       to="/admin"

@@ -1,7 +1,9 @@
 import { NavLink } from 'react-router-dom'
-import { Anchor, Globe, Trophy, User } from 'lucide-react'
+import { Anchor, Globe, Settings, Trophy, User } from 'lucide-react'
+import { useAuth } from '../context/AuthContext'
 
 export function BottomNav() {
+  const { isAdmin } = useAuth()
   return (
     <nav
       className="fixed bottom-0 left-0 right-0 z-50 border-t border-slate-200/90 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-4px_24px_rgba(15,23,42,0.06)] backdrop-blur-md"
@@ -85,6 +87,27 @@ export function BottomNav() {
             </>
           )}
         </NavLink>
+        {isAdmin && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) =>
+              `flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 px-0.5 py-2 text-[10px] font-medium leading-tight transition-colors sm:gap-1 sm:text-xs ${
+                isActive ? 'text-slate-900' : 'text-slate-400'
+              }`
+            }
+          >
+            {({ isActive }) => (
+              <>
+                <Settings
+                  className="h-5 w-5 shrink-0 sm:h-6 sm:w-6"
+                  strokeWidth={isActive ? 2.25 : 1.75}
+                  aria-hidden
+                />
+                <span>관리자</span>
+              </>
+            )}
+          </NavLink>
+        )}
       </div>
     </nav>
   )

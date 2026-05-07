@@ -96,6 +96,25 @@ export function clearVoyageEntriesStorage(): void {
   }
 }
 
+/** 특정 일지 한 건 삭제 — 공동의 바다 본인 글 삭제 시 사용 */
+export function deleteVoyageEntry(entryId: string): boolean {
+  if (typeof window === 'undefined') return false
+  const id = entryId?.trim?.() ?? ''
+  if (!id) return false
+  try {
+    const entries = loadVoyageEntries()
+    const next = entries.filter((e) => e.id !== id)
+    if (next.length === entries.length) return false
+    localStorage.setItem(
+      VOYAGE_ENTRIES_STORAGE_KEY,
+      JSON.stringify(next),
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** 기존 일지에 leg 정보가 없을 때, 첫 항차 id로 한 번에 묶어 줌 */
 export function migrateOrphanVoyageEntriesToLeg(legId: string): void {
   if (typeof window === 'undefined' || !legId.trim()) return

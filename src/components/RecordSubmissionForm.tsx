@@ -28,13 +28,12 @@ import { getOrCreateUserId } from '../voyage/userIdentity'
 
 const NEW_TOPIC_VALUE = '__new_topic__'
 
-/** 항해 완료 → 기록 신청으로 넘길 때 스냅샷 (일지·카테고리·추천 수치) */
+/** 항해 완료 → 기록 신청으로 넘길 때 스냅샷 (일지·카테고리). */
 export type VoyageRecordPrefill = {
   diaryEntries: LogEntry[]
   excludedDiaryIds: string[]
   initialCategoryId?: string | null
   goalNameSnapshot: string
-  recordValueSuggestion?: string
   reflectionSeed?: string
   /** 항해 완료 시점 스냅샷 — 공동체 응원 집계 */
   communityCheerTotal?: number
@@ -151,7 +150,7 @@ export default function RecordSubmissionForm({
       setReflectionNote(voyagePrefill.reflectionSeed ?? '')
       setDailyRoutines([''])
       setCrisisMethodology('')
-      setRecordValue(voyagePrefill.recordValueSuggestion ?? '')
+      setRecordValue('')
       const catInit =
         voyagePrefill.initialCategoryId &&
         categories.some((c) => c.id === voyagePrefill.initialCategoryId)
@@ -244,6 +243,7 @@ export default function RecordSubmissionForm({
     }
 
     let resolvedCategoryId = categorySelect
+    let resolvedCategoryTitle = ''
     if (categorySelect === NEW_TOPIC_VALUE) {
       const title = customCategoryTitle.trim()
       if (!title) {
@@ -255,6 +255,10 @@ export default function RecordSubmissionForm({
         window.alert('주제 등록에 실패했습니다.')
         return
       }
+      resolvedCategoryTitle = title
+    } else {
+      resolvedCategoryTitle =
+        categories.find((c) => c.id === categorySelect)?.title?.trim() ?? ''
     }
 
     if (!resolvedCategoryId) {
@@ -300,6 +304,7 @@ export default function RecordSubmissionForm({
       await submitRecordApplication({
         applicantName,
         categoryId: resolvedCategoryId,
+        ...(resolvedCategoryTitle ? { categoryTitle: resolvedCategoryTitle } : {}),
         recordValue,
         journeyNote: reflectionNote,
         files: uploadEntries.map((e) => e.file),
@@ -435,6 +440,10 @@ export default function RecordSubmissionForm({
             placeholder="예: 22회, 1,400골, 500시간"
             className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
           />
+          <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+            기록의 핵심 단위(횟수·시간·개수 등)만 적어 주세요. 달성률(%)은 별도 항목이며
+            여기서는 받지 않습니다.
+          </p>
         </label>
 
         <div className="mt-5 rounded-xl border border-sky-100 bg-sky-50/40 p-3">

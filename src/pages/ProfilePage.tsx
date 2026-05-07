@@ -12,7 +12,6 @@ import {
 import { loadVoyageEntries } from '../voyage/voyageEntries'
 import { loadMyVoyage } from '../voyage/myVoyageStorage'
 import { BumpingCount } from '../components/BumpingCount'
-import { useAdminMode } from '../hooks/useGannessStorage'
 import {
   GANNESS_STORAGE_EVENT,
   getRecordCategoryTitle,
@@ -38,6 +37,7 @@ import {
   resolveDisplayName,
 } from '../voyage/lighthouseStorage'
 import { getOrCreateUserId } from '../voyage/userIdentity'
+import { useAuth } from '../context/AuthContext'
 
 function splitApplicationsForViewer(nameTrimmed: string, apps: RecordApplication[]) {
   if (!nameTrimmed) {
@@ -62,7 +62,7 @@ function splitApplicationsForViewer(nameTrimmed: string, apps: RecordApplication
 
 export default function ProfilePage() {
   const { pathname } = useLocation()
-  const { enabled: adminMode, setEnabled: setAdminMode } = useAdminMode()
+  const { isAdmin } = useAuth()
   const [memoryOpen, setMemoryOpen] =
     useState<CompletedVoyageArchiveEntry | null>(null)
   const [constellationOpen, setConstellationOpen] = useState(false)
@@ -460,7 +460,7 @@ export default function ProfilePage() {
           </p>
         </section>
 
-        {adminMode && (
+        {isAdmin && (
           <div className="mt-8 rounded-2xl border border-indigo-200 bg-white/90 p-4 shadow-md">
             <Link
               to="/admin"
@@ -704,29 +704,6 @@ export default function ProfilePage() {
         </div>
       )}
 
-      <div className="pointer-events-auto fixed bottom-24 right-3 z-40 flex flex-col items-end gap-1 opacity-[0.22] transition hover:opacity-100">
-        <div className="flex items-center gap-2 rounded-md px-1 py-0.5 text-[10px] text-slate-500">
-          <span className="select-none" id="admin-mode-label">
-            관리자 모드
-          </span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={adminMode}
-            aria-labelledby="admin-mode-label"
-            onClick={() => setAdminMode(!adminMode)}
-            className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
-              adminMode ? 'bg-indigo-500/80' : 'bg-slate-300/80'
-            }`}
-          >
-            <span
-              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                adminMode ? 'left-4' : 'left-0.5'
-              }`}
-            />
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

@@ -274,9 +274,9 @@ export default function MyOceanPage() {
 
   const [selectedWaveTag, setSelectedWaveTag] =
     useState<WaveMoodTag>('passion')
-  const [draft, setDraft] = useState('')
-  const [tailwindDraft, setTailwindDraft] = useState('')
-  const [emptyGoalDraft, setEmptyGoalDraft] = useState('')
+  /** 순풍(tailwind 태그) vs 파도(TAG_OPTIONS 태그) — 하나의 일지 입력창으로 통합 */
+  const [diaryKind, setDiaryKind] = useState<'tailwind' | 'wave'>('wave')
+  const [diaryDraft, setDiaryDraft] = useState('')
   const [departMilestonesDraft, setDepartMilestonesDraft] = useState('')
   const [goalCategoryId, setGoalCategoryId] = useState('')
   const [departCustomCategoryDraft, setDepartCustomCategoryDraft] =
@@ -288,12 +288,12 @@ export default function MyOceanPage() {
   const departCategoryDropdownRef = useRef<HTMLDivElement>(null)
 
   const departCategoryTriggerLabel = useMemo(() => {
-    if (!goalCategoryId) return '선택하지 않음 · 자유 목표'
+    if (!goalCategoryId) return '카테고리를 선택해 주세요'
     if (goalCategoryId === DEPART_NEW_CATEGORY_VALUE) {
       return '[+ 새로운 카테고리 직접 개척하기]'
     }
     const c = recordCategories.find((x) => x.id === goalCategoryId)
-    if (!c) return '선택하지 않음 · 자유 목표'
+    if (!c) return '카테고리를 선택해 주세요'
     return `${c.title}${c.status === 'pending' ? ' (심사 중)' : ''}`
   }, [goalCategoryId, recordCategories])
   const [entries, setEntries] = useState<LogEntry[]>([])
@@ -309,25 +309,16 @@ export default function MyOceanPage() {
   const [myRoutineTick, setMyRoutineTick] = useState(0)
   const [customRoutineDraft, setCustomRoutineDraft] = useState('')
 
-  const [wavePendingAttach, setWavePendingAttach] = useState<
-    LocalPendingAttach[]
-  >([])
-  const [twPendingAttach, setTwPendingAttach] = useState<LocalPendingAttach[]>(
-    [],
-  )
+  const [pendingAttach, setPendingAttach] = useState<LocalPendingAttach[]>([])
   /** 일지 미디어 Storage 업로드 중 — 중복 제출 방지 */
-  const [diarySubmitBusy, setDiarySubmitBusy] = useState<
-    'wave' | 'tailwind' | null
-  >(null)
-  const waveAttachInputRef = useRef<HTMLInputElement>(null)
-  const twAttachInputRef = useRef<HTMLInputElement>(null)
+  const [diarySubmitBusy, setDiarySubmitBusy] = useState(false)
+  const diaryAttachInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     return () => {
-      wavePendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-      twPendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+      pendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
     }
-  }, [wavePendingAttach, twPendingAttach])
+  }, [pendingAttach])
 
   const entryCount = entries.length
   const tier = depthTier(entryCount)
@@ -617,16 +608,9 @@ export default function MyOceanPage() {
 
   function handleDepart(e: React.FormEvent) {
     e.preventDefault()
-    const name = emptyGoalDraft.trim()
-    if (!name) {
-      showToast({
-        kind: 'sync_error',
-        message: '항해 목표를 먼저 입력해 주세요!',
-      })
-      return
-    }
 
     let resolvedCategoryId: string | null = null
+    let resolvedGoalName = ''
     if (goalCategoryId === DEPART_NEW_CATEGORY_VALUE) {
       const customTitle = departCustomCategoryDraft.trim()
       if (!customTitle) {
@@ -639,8 +623,34 @@ export default function MyOceanPage() {
         return
       }
       resolvedCategoryId = newId
+      resolvedGoalName = customTitle
     } else if (goalCategoryId.trim()) {
-      resolvedCategoryId = goalCategoryId.trim()
+      const picked = recordCategories.find(
+        (c) => c.id === goalCategoryId.trim(),
+      )
+      if (!picked) {
+        showToast({
+          kind: 'sync_error',
+          message: '선택한 카테고리를 찾을 수 없습니다.',
+        })
+        return
+      }
+      resolvedCategoryId = picked.id
+      resolvedGoalName = picked.title.trim()
+    } else {
+      showToast({
+        kind: 'sync_error',
+        message: '목표의 성격(카테고리)을 먼저 골라 주세요!',
+      })
+      return
+    }
+
+    if (!resolvedGoalName) {
+      showToast({
+        kind: 'sync_error',
+        message: '카테고리 이름을 확인해 주세요.',
+      })
+      return
     }
 
     const lines = departMilestonesDraft
@@ -657,7 +667,7 @@ export default function MyOceanPage() {
           }))
     setVoyageProfile(
       withSyncedVoyageDerived({
-        goalName: name,
+        goalName: resolvedGoalName,
         inspiredBy: null,
         subGoal: '',
         progressPercent: 0,
@@ -666,7 +676,6 @@ export default function MyOceanPage() {
         milestones,
       }),
     )
-    setEmptyGoalDraft('')
     setGoalCategoryId('')
     setDepartCustomCategoryDraft('')
     setDepartMilestonesDraft('')
@@ -677,11 +686,14 @@ export default function MyOceanPage() {
     [voyageProfile.voyageLegId, entries],
   )
 
-  async function handleSubmitWave(e: React.FormEvent) {
+  async function handleSubmitDiary(e: React.FormEvent) {
     e.preventDefault()
     if (diarySubmitBusy) return
-    const textTrim = draft.trim()
-    if (!textTrim && wavePendingAttach.length === 0) return
+    const textTrim = diaryDraft.trim()
+    if (!textTrim && pendingAttach.length === 0) return
+
+    const tag: MoodTag =
+      diaryKind === 'tailwind' ? 'tailwind' : selectedWaveTag
 
     const entryId = crypto.randomUUID()
 
@@ -700,13 +712,13 @@ export default function MyOceanPage() {
     }
 
     let attachments: LogAttachment[] | undefined
-    if (wavePendingAttach.length > 0) {
+    if (pendingAttach.length > 0) {
       const useStorage = Boolean(uid && isFirebaseConfigured())
       if (useStorage) {
-        setDiarySubmitBusy('wave')
+        setDiarySubmitBusy(true)
         try {
           attachments = await Promise.all(
-            wavePendingAttach.map(async (p) => {
+            pendingAttach.map(async (p) => {
               const attId = crypto.randomUUID()
               const type: LogAttachment['type'] = p.file.type.startsWith(
                 'video/',
@@ -728,15 +740,15 @@ export default function MyOceanPage() {
             message:
               '파일 업로드에 실패했습니다. 네트워크와 Storage 규칙을 확인해 주세요.',
           })
-          setDiarySubmitBusy(null)
+          setDiarySubmitBusy(false)
           return
         }
-        wavePendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-        setWavePendingAttach([])
-        setDiarySubmitBusy(null)
+        pendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+        setPendingAttach([])
+        setDiarySubmitBusy(false)
       } else {
         const built = await Promise.all(
-          wavePendingAttach.map(async (p) => {
+          pendingAttach.map(async (p) => {
             const dataUrl = await fileToDataUrl(p.file)
             const type: LogAttachment['type'] = p.file.type.startsWith(
               'video/',
@@ -751,8 +763,8 @@ export default function MyOceanPage() {
           }),
         )
         attachments = built
-        wavePendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-        setWavePendingAttach([])
+        pendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+        setPendingAttach([])
       }
     }
 
@@ -761,7 +773,7 @@ export default function MyOceanPage() {
       (attachments?.length ? '(미디어만 첨부한 날)' : '')
     const next: LogEntry = {
       id: entryId,
-      tag: selectedWaveTag,
+      tag,
       body,
       createdAt: new Date().toISOString(),
       inspiredCount: 0,
@@ -769,8 +781,8 @@ export default function MyOceanPage() {
       ...(attachments?.length ? { attachments } : {}),
     }
     setEntries((prev) => [next, ...prev])
-    setDraft('')
-    if (waveAttachInputRef.current) waveAttachInputRef.current.value = ''
+    setDiaryDraft('')
+    if (diaryAttachInputRef.current) diaryAttachInputRef.current.value = ''
     if (uid) {
       void upsertLog(uid, next).catch(() => {
         showToast({
@@ -781,124 +793,12 @@ export default function MyOceanPage() {
     }
   }
 
-  function removeWaveAttach(key: string) {
-    setWavePendingAttach((prev) => {
+  function removePendingAttach(key: string) {
+    setPendingAttach((prev) => {
       const t = prev.find((x) => x.key === key)
       if (t) URL.revokeObjectURL(t.previewUrl)
       return prev.filter((x) => x.key !== key)
     })
-  }
-
-  function removeTwAttach(key: string) {
-    setTwPendingAttach((prev) => {
-      const t = prev.find((x) => x.key === key)
-      if (t) URL.revokeObjectURL(t.previewUrl)
-      return prev.filter((x) => x.key !== key)
-    })
-  }
-
-  async function handleSubmitTailwind(e: React.FormEvent) {
-    e.preventDefault()
-    if (diarySubmitBusy) return
-    const textTrim = tailwindDraft.trim()
-    if (!textTrim && twPendingAttach.length === 0) return
-
-    const entryId = crypto.randomUUID()
-
-    let legId = voyageProfile.voyageLegId.trim()
-    if (!legId && voyageProfile.goalName.trim()) {
-      legId = crypto.randomUUID()
-      setVoyageProfile((p) => ({ ...p, voyageLegId: legId }))
-      if (uid) {
-        void migrateLogsAssignLeg(uid, legId).catch(() => {
-          showToast({
-            kind: 'sync_error',
-            message: '일지 항차 정보를 갱신하지 못했습니다.',
-          })
-        })
-      }
-    }
-
-    let attachments: LogAttachment[] | undefined
-    if (twPendingAttach.length > 0) {
-      const useStorage = Boolean(uid && isFirebaseConfigured())
-      if (useStorage) {
-        setDiarySubmitBusy('tailwind')
-        try {
-          attachments = await Promise.all(
-            twPendingAttach.map(async (p) => {
-              const attId = crypto.randomUUID()
-              const type: LogAttachment['type'] = p.file.type.startsWith(
-                'video/',
-              )
-                ? 'video'
-                : 'image'
-              const mediaUrl = await uploadDiaryAttachment(
-                uid,
-                entryId,
-                attId,
-                p.file,
-              )
-              return { id: attId, type, mediaUrl }
-            }),
-          )
-        } catch {
-          showToast({
-            kind: 'sync_error',
-            message:
-              '파일 업로드에 실패했습니다. 네트워크와 Storage 규칙을 확인해 주세요.',
-          })
-          setDiarySubmitBusy(null)
-          return
-        }
-        twPendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-        setTwPendingAttach([])
-        setDiarySubmitBusy(null)
-      } else {
-        const built = await Promise.all(
-          twPendingAttach.map(async (p) => {
-            const dataUrl = await fileToDataUrl(p.file)
-            const type: LogAttachment['type'] = p.file.type.startsWith(
-              'video/',
-            )
-              ? 'video'
-              : 'image'
-            return {
-              id: crypto.randomUUID(),
-              type,
-              dataUrl,
-            }
-          }),
-        )
-        attachments = built
-        twPendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-        setTwPendingAttach([])
-      }
-    }
-
-    const body =
-      textTrim ||
-      (attachments?.length ? '(미디어만 첨부한 날)' : '')
-    const next: LogEntry = {
-      id: entryId,
-      tag: 'tailwind',
-      body,
-      createdAt: new Date().toISOString(),
-      inspiredCount: 0,
-      ...(legId ? { voyageLegId: legId } : {}),
-      ...(attachments?.length ? { attachments } : {}),
-    }
-    setEntries((prev) => [next, ...prev])
-    setTailwindDraft('')
-    if (twAttachInputRef.current) twAttachInputRef.current.value = ''
-    if (uid) {
-      void upsertLog(uid, next).catch(() => {
-        showToast({
-          kind: 'sync_error',
-          message: '일지를 클라우드에 저장하지 못했습니다. 네트워크를 확인해 주세요.',
-        })
-      })
-    }
   }
 
   function diaryEntriesForArchive(): LogEntry[] {
@@ -935,19 +835,16 @@ export default function MyOceanPage() {
       isCompleted: false,
       finalRetrospective: null,
     }
-    wavePendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-    twPendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
-    setWavePendingAttach([])
-    setTwPendingAttach([])
+    pendingAttach.forEach((p) => URL.revokeObjectURL(p.previewUrl))
+    setPendingAttach([])
 
     setVoyageProfile(getEmptyVoyageProfile())
     setEntries([])
     setRoutines([])
     setVoyageMeta(freshMeta)
-    setDraft('')
-    setTailwindDraft('')
+    setDiaryDraft('')
+    setDiaryKind('wave')
     setNewMilestoneDraft('')
-    setEmptyGoalDraft('')
     setDepartMilestonesDraft('')
     setGoalCategoryId('')
     setSelectedWaveTag('passion')
@@ -972,10 +869,6 @@ export default function MyOceanPage() {
       initialCategoryId: synced.linkedCategoryId,
       goalNameSnapshot:
         synced.goalName.trim() || '나의 항해',
-      recordValueSuggestion:
-        synced.progressPercent > 0
-          ? `${synced.progressPercent}% 달성`
-          : '',
       ...(cheerAgg.total > 0
         ? {
             communityCheerTotal: cheerAgg.total,
@@ -1129,8 +1022,8 @@ export default function MyOceanPage() {
               어떤 목표를 향해 돛을 올릴까요?
             </h2>
             <p className="mt-2 text-center text-sm leading-relaxed text-slate-600">
-              목표 한 줄과 성격(카테고리)을 정한 뒤 출항하면 항해 일지와 달성률을 기록할
-              수 있어요.
+              도전할 카테고리를 골라 출항하면, 그 이름이 그대로 「현재 진행 중인 목표」가
+              됩니다.
             </p>
             <form onSubmit={handleDepart} className="mx-auto mt-8 max-w-md space-y-5">
               <div className="space-y-2">
@@ -1175,17 +1068,6 @@ export default function MyOceanPage() {
                         : 'pointer-events-none invisible -translate-y-1 opacity-0'
                     }`}
                   >
-                    <li role="presentation">
-                      <button
-                        type="button"
-                        role="option"
-                        aria-selected={goalCategoryId === ''}
-                        onClick={() => pickDepartCategory('')}
-                        className="w-full px-4 py-2.5 text-left text-sm text-slate-700 transition-colors hover:bg-blue-50 hover:text-blue-600"
-                      >
-                        선택하지 않음 · 자유 목표
-                      </button>
-                    </li>
                     {recordCategories.map((c) => (
                       <li key={c.id} role="presentation">
                         <button
@@ -1241,22 +1123,6 @@ export default function MyOceanPage() {
               </div>
               <div className="space-y-2">
                 <label
-                  htmlFor="new-goal"
-                  className="block text-xs font-bold uppercase tracking-wide text-slate-500"
-                >
-                  항해 목표
-                </label>
-                <input
-                  id="new-goal"
-                  type="text"
-                  value={emptyGoalDraft}
-                  onChange={(e) => setEmptyGoalDraft(e.target.value)}
-                  placeholder="예: 우리 학교에서 하루에 낮잠 제일 많이 잔 사람"
-                  className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-4 text-base font-medium text-slate-900 placeholder:text-slate-400 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-200"
-                />
-              </div>
-              <div className="space-y-2">
-                <label
                   htmlFor="depart-milestones"
                   className="block text-xs font-bold uppercase tracking-wide text-slate-500"
                 >
@@ -1274,8 +1140,9 @@ export default function MyOceanPage() {
               <button
                 type="submit"
                 disabled={
-                  goalCategoryId === DEPART_NEW_CATEGORY_VALUE &&
-                  !departCustomCategoryDraft.trim()
+                  !goalCategoryId ||
+                  (goalCategoryId === DEPART_NEW_CATEGORY_VALUE &&
+                    !departCustomCategoryDraft.trim())
                 }
                 className="w-full rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 py-4 text-base font-bold text-white shadow-lg shadow-indigo-300/40 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
               >
@@ -1744,72 +1611,147 @@ export default function MyOceanPage() {
               </div>
             )}
 
-            <div className="mb-10 grid gap-4 sm:grid-cols-2">
+            <div className="mb-10">
               <section className={waveCardClass}>
-                <div className="mb-3 flex items-center gap-2">
-                  <Waves className="h-5 w-5 opacity-90" aria-hidden />
-                  <p className={`text-base font-semibold ${labelTone}`}>오늘의 파도</p>
+                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Ship className="h-5 w-5 opacity-90" aria-hidden />
+                    <div>
+                      <p className={`text-base font-semibold ${labelTone}`}>
+                        오늘의 항해
+                      </p>
+                      <p className={`mt-0.5 text-sm ${mutedTone}`}>
+                        순풍과 파도 중 하나를 고르고, 한 줄이라도 마음을 남겨 보세요.
+                      </p>
+                    </div>
+                  </div>
                 </div>
-                <p className={`text-sm ${mutedTone}`}>
-                  시행착오와 마음의 물결을 남겨요.
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {TAG_OPTIONS.map((t) => {
-                    const on = selectedWaveTag === t.id
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setSelectedWaveTag(t.id)}
-                        className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors duration-1000 ease-in-out ${
-                          on
-                            ? abyss
-                              ? 'border-sky-400/80 bg-slate-700/80 text-slate-100 shadow-inner shadow-black/30'
-                              : deepWater
-                                ? 'border-sky-300 bg-white/20 text-white shadow-inner shadow-black/20'
-                                : 'border-sky-400 bg-sky-100 text-sky-900 shadow-inner shadow-sky-200/50'
-                            : abyss
-                              ? 'border-slate-600 bg-slate-800/50 text-slate-300 hover:bg-slate-700/50'
-                              : deepWater
-                                ? 'border-white/25 bg-white/10 text-white/90 hover:bg-white/15'
-                                : 'border-slate-200 bg-white/90 text-slate-600 hover:border-sky-200 hover:bg-sky-50/80'
-                        }`}
-                      >
-                        {t.label}
-                      </button>
-                    )
-                  })}
+
+                <div
+                  className={`mb-4 flex rounded-xl border p-1 ${
+                    abyss
+                      ? 'border-slate-600 bg-slate-900/40'
+                      : deepWater
+                        ? 'border-white/25 bg-white/10'
+                        : 'border-slate-200 bg-slate-50/90'
+                  }`}
+                  role="tablist"
+                  aria-label="오늘의 항해 유형"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={diaryKind === 'wave'}
+                    onClick={() => setDiaryKind('wave')}
+                    className={`flex-1 rounded-lg px-3 py-2.5 text-center text-sm font-bold transition ${
+                      diaryKind === 'wave'
+                        ? abyss
+                          ? 'bg-sky-600 text-white shadow-md'
+                          : deepWater
+                            ? 'bg-white/25 text-white shadow-md'
+                            : 'bg-white text-sky-900 shadow-sm ring-1 ring-sky-200'
+                        : abyss
+                          ? 'text-slate-400 hover:bg-slate-800/60'
+                          : deepWater
+                            ? 'text-white/75 hover:bg-white/10'
+                            : 'text-slate-500 hover:bg-white/80'
+                    }`}
+                  >
+                    파도 🌊
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={diaryKind === 'tailwind'}
+                    onClick={() => setDiaryKind('tailwind')}
+                    className={`flex-1 rounded-lg px-3 py-2.5 text-center text-sm font-bold transition ${
+                      diaryKind === 'tailwind'
+                        ? abyss
+                          ? 'bg-amber-600 text-white shadow-md'
+                          : deepWater
+                            ? 'bg-amber-500/90 text-white shadow-md'
+                            : 'bg-gradient-to-r from-amber-400 to-orange-500 text-white shadow-sm'
+                        : abyss
+                          ? 'text-slate-400 hover:bg-slate-800/60'
+                          : deepWater
+                            ? 'text-white/75 hover:bg-white/10'
+                            : 'text-slate-500 hover:bg-white/80'
+                    }`}
+                  >
+                    순풍 ☀️
+                  </button>
                 </div>
-                <form onSubmit={handleSubmitWave} className="mt-5 space-y-4">
+
+                {diaryKind === 'wave' && (
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    {TAG_OPTIONS.map((t) => {
+                      const on = selectedWaveTag === t.id
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setSelectedWaveTag(t.id)}
+                          className={`rounded-full border px-3 py-1.5 text-sm font-medium transition-colors duration-1000 ease-in-out ${
+                            on
+                              ? abyss
+                                ? 'border-sky-400/80 bg-slate-700/80 text-slate-100 shadow-inner shadow-black/30'
+                                : deepWater
+                                  ? 'border-sky-300 bg-white/20 text-white shadow-inner shadow-black/20'
+                                  : 'border-sky-400 bg-sky-100 text-sky-900 shadow-inner shadow-sky-200/50'
+                              : abyss
+                                ? 'border-slate-600 bg-slate-800/50 text-slate-300 hover:bg-slate-700/50'
+                                : deepWater
+                                  ? 'border-white/25 bg-white/10 text-white/90 hover:bg-white/15'
+                                  : 'border-slate-200 bg-white/90 text-slate-600 hover:border-sky-200 hover:bg-sky-50/80'
+                          }`}
+                        >
+                          {t.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+
+                <form onSubmit={handleSubmitDiary} className="space-y-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
                     <div className="min-w-0 flex-1">
-                      <label htmlFor="log-body" className="sr-only">
-                        오늘의 파도 기록
+                      <label htmlFor="diary-body" className="sr-only">
+                        오늘의 항해 기록
                       </label>
                       <textarea
-                        id="log-body"
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        rows={5}
-                        placeholder="오늘의 시행착오나 깨달음…"
-                        className={`min-h-[10rem] w-full resize-y rounded-xl border px-3 py-2.5 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
-                          deepWater
-                            ? abyss
-                              ? 'border-slate-600 bg-slate-900/60 text-slate-100 focus:border-sky-500 focus:ring-sky-500/30'
-                              : 'border-white/30 bg-white/95 text-slate-900 focus:border-sky-400 focus:ring-sky-300/50'
-                            : 'border-slate-200 bg-white/95 text-slate-800 focus:border-sky-400 focus:ring-sky-200'
+                        id="diary-body"
+                        value={diaryDraft}
+                        onChange={(e) => setDiaryDraft(e.target.value)}
+                        rows={6}
+                        placeholder={
+                          diaryKind === 'tailwind'
+                            ? '오늘 나에게 불어온 좋은 바람…'
+                            : '오늘의 시행착오, 깨달음, 마음의 물결…'
+                        }
+                        className={`min-h-[11rem] w-full resize-y rounded-xl border px-3 py-2.5 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
+                          diaryKind === 'tailwind'
+                            ? deepWater
+                              ? abyss
+                                ? 'border-amber-900/50 bg-slate-900/60 text-amber-50 focus:border-amber-400 focus:ring-amber-500/30'
+                                : 'border-amber-200/40 bg-white/95 text-slate-900 focus:ring-amber-300/50'
+                              : 'border-amber-200 bg-amber-50/90 text-slate-800 focus:border-amber-400 focus:ring-amber-100'
+                            : deepWater
+                              ? abyss
+                                ? 'border-slate-600 bg-slate-900/60 text-slate-100 focus:border-sky-500 focus:ring-sky-500/30'
+                                : 'border-white/30 bg-white/95 text-slate-900 focus:border-sky-400 focus:ring-sky-300/50'
+                              : 'border-slate-200 bg-white/95 text-slate-800 focus:border-sky-400 focus:ring-sky-200'
                         }`}
                       />
                     </div>
                     <div className="flex w-full shrink-0 flex-col gap-2 sm:w-[11.5rem]">
                       <input
-                        ref={waveAttachInputRef}
+                        ref={diaryAttachInputRef}
                         type="file"
                         accept="image/*,video/*"
                         multiple
                         hidden
                         onChange={(e) => {
-                          setWavePendingAttach((prev) =>
+                          setPendingAttach((prev) =>
                             appendPendingAttach(prev, e.target.files),
                           )
                           e.target.value = ''
@@ -1817,31 +1759,38 @@ export default function MyOceanPage() {
                       />
                       <button
                         type="button"
-                        onClick={() => waveAttachInputRef.current?.click()}
+                        onClick={() => diaryAttachInputRef.current?.click()}
                         disabled={
-                          diarySubmitBusy !== null ||
-                          wavePendingAttach.length >= MAX_LOG_ATTACHMENTS
+                          diarySubmitBusy ||
+                          pendingAttach.length >= MAX_LOG_ATTACHMENTS
                         }
                         className={`inline-flex min-h-[3.1rem] w-full items-center justify-center gap-2.5 rounded-2xl border px-3.5 py-3 text-sm font-bold shadow-md transition disabled:opacity-40 ${
-                          abyss
-                            ? 'border-sky-500/45 bg-gradient-to-r from-slate-800/90 to-slate-700/90 text-sky-100 hover:brightness-110'
-                            : deepWater
-                              ? 'border-white/35 bg-gradient-to-r from-white/20 to-sky-200/20 text-white hover:brightness-110'
-                              : 'border-sky-300/80 bg-gradient-to-r from-sky-500 to-indigo-500 text-white hover:brightness-105'
+                          diaryKind === 'tailwind'
+                            ? abyss
+                              ? 'border-amber-600/50 bg-gradient-to-r from-amber-900/55 to-orange-900/55 text-amber-100 hover:brightness-110'
+                              : deepWater
+                                ? 'border-amber-300/45 bg-gradient-to-r from-white/20 to-amber-200/15 text-white hover:brightness-110'
+                                : 'border-amber-300 bg-gradient-to-r from-amber-400 to-orange-500 text-white hover:brightness-105'
+                            : abyss
+                              ? 'border-sky-500/45 bg-gradient-to-r from-slate-800/90 to-slate-700/90 text-sky-100 hover:brightness-110'
+                              : deepWater
+                                ? 'border-white/35 bg-gradient-to-r from-white/20 to-sky-200/20 text-white hover:brightness-110'
+                                : 'border-sky-300/80 bg-gradient-to-r from-sky-500 to-indigo-500 text-white hover:brightness-105'
                         }`}
                       >
                         <ImagePlus className="h-4.5 w-4.5 shrink-0" aria-hidden />
                         사진/영상 추가
                       </button>
                       <p className={`text-center text-[11px] ${mutedTone}`}>
-                        버튼을 누르면 갤러리/파일 탐색기가 열려요 · {wavePendingAttach.length}/{MAX_LOG_ATTACHMENTS}개
+                        버튼을 누르면 갤러리/파일 탐색기가 열려요 ·{' '}
+                        {pendingAttach.length}/{MAX_LOG_ATTACHMENTS}개
                       </p>
-                      {wavePendingAttach.length > 0 && (
+                      {pendingAttach.length > 0 && (
                         <ul
                           className="flex max-h-48 flex-wrap content-start gap-2 overflow-y-auto sm:flex-col sm:flex-nowrap"
                           aria-label="첨부 미리보기"
                         >
-                          {wavePendingAttach.map((p) => (
+                          {pendingAttach.map((p) => (
                             <li
                               key={p.key}
                               className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-white/20 shadow-sm sm:h-24 sm:w-full sm:max-w-none"
@@ -1863,7 +1812,7 @@ export default function MyOceanPage() {
                               )}
                               <button
                                 type="button"
-                                onClick={() => removeWaveAttach(p.key)}
+                                onClick={() => removePendingAttach(p.key)}
                                 className="absolute right-0.5 top-0.5 rounded-full bg-black/55 p-0.5 text-white hover:bg-black/75"
                                 aria-label="첨부 제거"
                               >
@@ -1879,18 +1828,24 @@ export default function MyOceanPage() {
                     <button
                       type="submit"
                       disabled={
-                        diarySubmitBusy !== null ||
-                        (!draft.trim() && wavePendingAttach.length === 0)
+                        diarySubmitBusy ||
+                        (!diaryDraft.trim() && pendingAttach.length === 0)
                       }
-                      className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm transition-colors duration-1000 ease-in-out disabled:cursor-not-allowed disabled:opacity-40 ${
-                        abyss
-                          ? 'bg-slate-200 text-slate-900 hover:bg-white'
-                          : deepWater
-                            ? 'bg-sky-100 text-slate-900 hover:bg-white'
-                            : 'bg-sky-600 text-white hover:bg-sky-700'
+                      className={`inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                        diaryKind === 'tailwind'
+                          ? abyss
+                            ? 'bg-amber-400/90 text-slate-900 hover:bg-amber-300'
+                            : deepWater
+                              ? 'bg-amber-100 text-slate-900 hover:bg-white'
+                              : 'bg-amber-500 text-white hover:bg-amber-600'
+                          : abyss
+                            ? 'bg-slate-200 text-slate-900 hover:bg-white'
+                            : deepWater
+                              ? 'bg-sky-100 text-slate-900 hover:bg-white'
+                              : 'bg-sky-600 text-white hover:bg-sky-700'
                       }`}
                     >
-                      {diarySubmitBusy === 'wave' ? (
+                      {diarySubmitBusy ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                           싣는 중…
@@ -1898,140 +1853,6 @@ export default function MyOceanPage() {
                       ) : (
                         <>
                           기록하기
-                          <SendHorizontal className="h-4 w-4" />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </form>
-              </section>
-
-              <section className={waveCardClass}>
-                <div className="mb-3 flex items-center gap-2">
-                  <Sparkles className="h-5 w-5 text-amber-200" aria-hidden />
-                  <p className={`text-base font-semibold ${labelTone}`}>오늘의 순풍</p>
-                </div>
-                <p className={`text-sm ${mutedTone}`}>
-                  긍정적인 변화와 작은 성취를 적어 보세요.
-                </p>
-                <form onSubmit={handleSubmitTailwind} className="mt-5 space-y-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-stretch">
-                    <div className="min-w-0 flex-1">
-                      <label htmlFor="tailwind-log" className="sr-only">
-                        오늘의 순풍
-                      </label>
-                      <textarea
-                        id="tailwind-log"
-                        value={tailwindDraft}
-                        onChange={(e) => setTailwindDraft(e.target.value)}
-                        rows={5}
-                        placeholder="오늘 나에게 불어온 좋은 바람…"
-                        className={`min-h-[10rem] w-full resize-y rounded-xl border px-3 py-2.5 text-sm placeholder:text-slate-400 focus:outline-none focus:ring-2 ${
-                          deepWater
-                            ? abyss
-                              ? 'border-amber-900/50 bg-slate-900/60 text-amber-50 focus:border-amber-400 focus:ring-amber-500/30'
-                              : 'border-amber-200/40 bg-white/95 text-slate-900 focus:ring-amber-300/50'
-                            : 'border-amber-200 bg-amber-50/90 text-slate-800 focus:border-amber-400 focus:ring-amber-100'
-                        }`}
-                      />
-                    </div>
-                    <div className="flex w-full shrink-0 flex-col gap-2 sm:w-[11.5rem]">
-                      <input
-                        ref={twAttachInputRef}
-                        type="file"
-                        accept="image/*,video/*"
-                        multiple
-                        hidden
-                        onChange={(e) => {
-                          setTwPendingAttach((prev) =>
-                            appendPendingAttach(prev, e.target.files),
-                          )
-                          e.target.value = ''
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => twAttachInputRef.current?.click()}
-                        disabled={
-                          diarySubmitBusy !== null ||
-                          twPendingAttach.length >= MAX_LOG_ATTACHMENTS
-                        }
-                        className={`inline-flex min-h-[3.1rem] w-full items-center justify-center gap-2.5 rounded-2xl border px-3.5 py-3 text-sm font-bold shadow-md transition disabled:opacity-40 ${
-                          abyss
-                            ? 'border-amber-600/50 bg-gradient-to-r from-amber-900/55 to-orange-900/55 text-amber-100 hover:brightness-110'
-                            : deepWater
-                              ? 'border-amber-300/45 bg-gradient-to-r from-white/20 to-amber-200/15 text-white hover:brightness-110'
-                              : 'border-amber-300 bg-gradient-to-r from-amber-400 to-orange-500 text-white hover:brightness-105'
-                        }`}
-                      >
-                        <ImagePlus className="h-4.5 w-4.5 shrink-0" aria-hidden />
-                        사진/영상 추가
-                      </button>
-                      <p className={`text-center text-[11px] ${mutedTone}`}>
-                        버튼을 누르면 갤러리/파일 탐색기가 열려요 · {twPendingAttach.length}/{MAX_LOG_ATTACHMENTS}개
-                      </p>
-                      {twPendingAttach.length > 0 && (
-                        <ul
-                          className="flex max-h-48 flex-wrap content-start gap-2 overflow-y-auto sm:flex-col sm:flex-nowrap"
-                          aria-label="순풍 첨부 미리보기"
-                        >
-                          {twPendingAttach.map((p) => (
-                            <li
-                              key={p.key}
-                              className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-amber-200/40 shadow-sm sm:h-24 sm:w-full sm:max-w-none"
-                            >
-                              {p.file.type.startsWith('video') ? (
-                                <video
-                                  src={p.previewUrl}
-                                  className="h-full w-full object-cover"
-                                  muted
-                                  playsInline
-                                  preload="metadata"
-                                />
-                              ) : (
-                                <img
-                                  src={p.previewUrl}
-                                  alt=""
-                                  className="h-full w-full object-cover"
-                                />
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => removeTwAttach(p.key)}
-                                className="absolute right-0.5 top-0.5 rounded-full bg-black/55 p-0.5 text-white hover:bg-black/75"
-                                aria-label="첨부 제거"
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex justify-end">
-                    <button
-                      type="submit"
-                      disabled={
-                        diarySubmitBusy !== null ||
-                        (!tailwindDraft.trim() && twPendingAttach.length === 0)
-                      }
-                      className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                        abyss
-                          ? 'bg-amber-400/90 text-slate-900 hover:bg-amber-300'
-                          : deepWater
-                            ? 'bg-amber-100 text-slate-900 hover:bg-white'
-                            : 'bg-amber-500 text-white hover:bg-amber-600'
-                      }`}
-                    >
-                      {diarySubmitBusy === 'tailwind' ? (
-                        <>
-                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                          싣는 중…
-                        </>
-                      ) : (
-                        <>
-                          순풍 남기기
                           <SendHorizontal className="h-4 w-4" />
                         </>
                       )}

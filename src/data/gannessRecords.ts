@@ -15,6 +15,8 @@ export type RecordGeneration = {
   dailyRoutines?: string[]
   /** 태풍(위기) 극복 방법 */
   crisisMethodology?: string
+  /** 기록 신청 시 작성한 전체 소감 */
+  journeyNote?: string
 }
 
 export type GannessRecordCategory = {
@@ -198,6 +200,10 @@ export function getCurrentHolder(
     typeof top.crisisMethodology === 'string' && top.crisisMethodology.trim()
       ? top.crisisMethodology.trim()
       : undefined
+  const note =
+    typeof top.journeyNote === 'string' && top.journeyNote.trim()
+      ? top.journeyNote.trim()
+      : undefined
   return {
     ...top,
     media: coerceRecordMedia(top.media),
@@ -212,6 +218,7 @@ export function getCurrentHolder(
         : 'unknown',
     ...(routines?.length ? { dailyRoutines: routines } : {}),
     ...(crisis ? { crisisMethodology: crisis } : {}),
+    ...(note ? { journeyNote: note } : {}),
   }
 }
 
@@ -239,6 +246,10 @@ export function getHistoryChronological(
         typeof h.crisisMethodology === 'string' && h.crisisMethodology.trim()
           ? h.crisisMethodology.trim()
           : undefined
+      const note =
+        typeof h.journeyNote === 'string' && h.journeyNote.trim()
+          ? h.journeyNote.trim()
+          : undefined
       return {
         ...h,
         media: coerceRecordMedia(h.media),
@@ -249,6 +260,7 @@ export function getHistoryChronological(
           typeof h.journeyId === 'string' && h.journeyId ? h.journeyId : 'unknown',
         ...(routines?.length ? { dailyRoutines: routines } : {}),
         ...(crisis ? { crisisMethodology: crisis } : {}),
+        ...(note ? { journeyNote: note } : {}),
       }
     })
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Trash2 } from 'lucide-react'
 import type { MoodTag } from '../voyage/types'
 import { TAG_LABEL } from '../voyage/constants'
 import { formatShortDate } from '../voyage/dateFormat'
@@ -14,7 +15,7 @@ import {
   saveCheerReactions,
   DEFAULT_CHEER_EMOJIS,
 } from '../voyage/cheerReactionsStorage'
-import { loadVoyageEntries } from '../voyage/voyageEntries'
+import { deleteVoyageEntry, loadVoyageEntries } from '../voyage/voyageEntries'
 import {
   appendBatonInspiredOwnerNotification,
   maybeAppendCheerForMyDiary,
@@ -28,6 +29,36 @@ import {
   rememberDisplayLabel,
 } from '../voyage/lighthouseStorage'
 import { getOrCreateUserId } from '../voyage/userIdentity'
+import { useAuth } from '../context/AuthContext'
+
+const HIDDEN_SHARED_POSTS_KEY = 'ganness-book:hidden-shared-posts'
+
+function loadHiddenSharedPostIds(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = localStorage.getItem(HIDDEN_SHARED_POSTS_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw)
+    if (!Array.isArray(arr)) return new Set()
+    return new Set(
+      arr.filter((x): x is string => typeof x === 'string' && x.trim() !== ''),
+    )
+  } catch {
+    return new Set()
+  }
+}
+
+function saveHiddenSharedPostIds(ids: Set<string>): void {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(
+      HIDDEN_SHARED_POSTS_KEY,
+      JSON.stringify(Array.from(ids)),
+    )
+  } catch {
+    /* ignore */
+  }
+}
 
 export type SharedFeedItem = {
   id: string
@@ -226,6 +257,7 @@ function CheerPicker({ postId, open, onToggle, onPick }: CheerPickerProps) {
 export default function SharedOceanPage() {
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const { isAdmin } = useAuth()
   const [sortMode, setSortMode] = useState<SortMode>('recent')
   const [feedScope, setFeedScope] = useState<FeedScope>('all')
   const [lighthouseTick, setLighthouseTick] = useState(0)
@@ -233,6 +265,10 @@ export default function SharedOceanPage() {
     loadCheerReactions(),
   )
   const [pickerOpenFor, setPickerOpenFor] = useState<string | null>(null)
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() =>
+    loadHiddenSharedPostIds(),
+  )
+  const [feedRefreshTick, setFeedRefreshTick] = useState(0)
 
   const [batonOpen, setBatonOpen] = useState(false)
   const [batonSource, setBatonSource] = useState<SharedFeedItem | null>(null)
@@ -255,12 +291,13 @@ export default function SharedOceanPage() {
 
   const sortedFeed = useMemo(() => {
     const mine = voyageDiariesAsFeedItems()
-    const list =
+    const baseList =
       feedScope === 'lighthouses'
         ? [...mine, ...MOCK_SHARED_FEED].filter((item) =>
             loadLighthouses().includes(item.authorUserId),
           )
         : [...mine, ...MOCK_SHARED_FEED]
+    const list = baseList.filter((item) => !hiddenIds.has(item.id))
     if (sortMode === 'recent') {
       return list.sort(
         (a, b) =>
@@ -272,7 +309,41 @@ export default function SharedOceanPage() {
       const tb = sumCheers(mergeCheers(b.cheers, cheerDeltas[b.id]))
       return tb - ta
     })
-  }, [sortMode, cheerDeltas, feedScope, lighthouseTick, pathname])
+    // feedRefreshTick: 본인 일지 삭제 후 voyageDiariesAsFeedItems 재계산용
+  }, [
+    sortMode,
+    cheerDeltas,
+    feedScope,
+    lighthouseTick,
+    pathname,
+    hiddenIds,
+    feedRefreshTick,
+  ])
+
+  function handleDeletePost(item: SharedFeedItem) {
+    const isOwn = item.authorUserId === myUserId
+    if (!isOwn && !isAdmin) return
+    if (!window.confirm('정말 이 게시글을 삭제하시겠습니까?')) return
+
+    const isMyVoyageDiary =
+      isOwn && loadVoyageEntries().some((e) => e.id === item.id)
+    if (isMyVoyageDiary) {
+      const ok = deleteVoyageEntry(item.id)
+      if (!ok) {
+        window.alert('삭제 처리 중 오류가 발생했습니다.')
+        return
+      }
+      setFeedRefreshTick((t) => t + 1)
+      return
+    }
+
+    setHiddenIds((prev) => {
+      const next = new Set(prev)
+      next.add(item.id)
+      saveHiddenSharedPostIds(next)
+      return next
+    })
+  }
 
   function addCheer(postId: string, emoji: string) {
     setCheerDeltas((prev) => {
@@ -473,12 +544,30 @@ export default function SharedOceanPage() {
                         />
                       )}
                     </div>
-                    <time
-                      className="text-xs text-slate-400"
-                      dateTime={item.createdAt}
-                    >
-                      {formatShortDate(item.createdAt)}
-                    </time>
+                    <div className="flex items-center gap-2">
+                      <time
+                        className="text-xs text-slate-400"
+                        dateTime={item.createdAt}
+                      >
+                        {formatShortDate(item.createdAt)}
+                      </time>
+                      {(item.authorUserId === myUserId || isAdmin) && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePost(item)}
+                          className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50/80 px-2 py-1 text-[11px] font-semibold text-rose-700 transition hover:bg-rose-100 active:scale-[0.98]"
+                          aria-label="이 게시글 삭제"
+                          title={
+                            item.authorUserId === myUserId
+                              ? '내 게시글 삭제'
+                              : '관리자 권한으로 삭제'
+                          }
+                        >
+                          <Trash2 className="h-3 w-3" aria-hidden />
+                          삭제
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <p className="text-sm leading-relaxed text-slate-700">
                     {item.content}
